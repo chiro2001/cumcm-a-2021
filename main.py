@@ -1,10 +1,15 @@
 import pandas as pd
 import torch
 from torch import nn
+import torch.optim as optim
 from utils import *
 
 
 class FAST(nn.Module):
+    # 一些常量设定
+    R = 300
+    F = 0.466
+
     def __init__(self):
         super(FAST, self).__init__()
 
@@ -19,6 +24,7 @@ class FAST(nn.Module):
         self.name_list: list = []
         self.index: dict = {}
         self.paddings_raw: np.ndarray = None
+        self.unit_vectors: np.ndarray = []
 
         self.loss_weights: np.ndarray = np.array([1, 1, 1])
 
@@ -30,7 +36,7 @@ class FAST(nn.Module):
         return get_distance(source[self.index[node1]], source[self.index[node2]])
 
     # 得到点与点的间隔
-    # 因为不知道具体边的关系，就按照三角形三条边考虑吧，数据是原来三倍
+    # 因为不知道具体边的关系，就按照三角形三条边考虑吧，数据（大约）是原来三倍
     def get_paddings(self, source: np.ndarray = None) -> np.ndarray:
         source = source if source is not None else self.position_raw
         paddings = []
@@ -84,14 +90,16 @@ class FAST(nn.Module):
         self.triangles_data = triangles_data
         self.count_triangles = len(triangles_data)
         self.count_nodes = len(list(nodes_data.keys()))
+        self.unit_vectors = np.array([get_unit_vector(self.position_raw[i], self.actuator_base[i]) for i in
+                                      range(self.count_nodes)])
         # 每个节点的伸展长度
         self.expands = nn.Parameter(torch.tensor(np.zeros(len(list(nodes_data.keys())))))
 
     # 计算在当前伸缩值状态下，主索节点的位置
     def update_position(self):
-        for i in range(self.count_nodes):
-            n = get_unit_vector(self.position_raw[i], self.actuator_base[i])
-            self.position[i] = self.position_raw[i] + n * self.expands[i]
+        self.position = self.position_raw + np.dot(self.unit_vectors.T, self.expands.detach().numpy())
+        # for i in range(self.count_nodes):
+        #     self.position[i] = self.position_raw[i] + self.unit_vectors[i] * self.expands[i]
 
     # 判断当前伸缩条件下能否满足伸缩量限制
     def is_expands_legal(self) -> bool:
@@ -130,15 +138,85 @@ class FAST(nn.Module):
 
     # 得到拟合精度误差
     def get_fitting_loss(self, weight: float = 1) -> float:
+        loss_sum = 0
+        # 得到底部顶点
+        vertex = self.get_vertex()
         for triangle in self.triangles_data:
             board = self.get_board(triangle)
-        return 0 * weight
+            plane = triangle_to_plane(board)
+            # 反射板中心
+            center = get_board_center(board)
+            # 反射板法向量
+            n_board = plane[:-1]
+            # 抛物面方程
+            # z = x**2 / (4 * f) + y**2 / (4 * f) + h,
+            # zdx = x / (2 * f)
+            # zdy = y / (2 * f)
+            # zdz = -1
+            # h = vertex,
+            h = vertex
+            # f = |h| - (1 - F) * R
+            f = np.abs(h) - (1 - FAST.F) * FAST.R
+            # 解方程求反射板法线和抛物面交点
+            # (x-x0) / A == (y-y0) / B == (z-z0) / C
+            x0, y0, z0 = center
+            A, B, C = n_board
+            if A == 0.0:
+                print("!!", triangle)
+                # continue
+                A += 1e-6
+
+            # x, y, z = sympy.Symbol('x'), sympy.Symbol('y'), sympy.Symbol('z')
+            # result = sympy.nonlinsolve([
+            #     (x - x0) * B - (y - y0) * A,
+            #     (y - y0) * C - (z - z0) * B,
+            #     ((x ** 2) / (4 * f) + (y ** 2) / (4 * f) + vertex) - z
+            # ], [x, y, z])
+            # result = [tuple(r) for r in result]
+
+            a = B**2 / (4 * f * A**2) + 1 / (4 * f)
+            b = B * y0 / (2 * A * f) - C / A - B**2 * x0 / (2 * f * A**2)
+            c = B**2 * x0**2 / (4 * f * A**2) - B * y0 * x0 / (2 * A * f) + y0**2 / (4 * f) + h - C / A * x0 + z0
+            if A == 0.0:
+                print('!!')
+            result = [None, None]
+            x = (-b + np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
+            result[0] = np.array([
+                x,
+                B / A * (x - x0) + y0,
+                C / A * (x - x0) + z0
+            ])
+            x = (-b - np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
+            result[1] = np.array([
+                x,
+                B / A * (x - x0) + y0,
+                C / A * (x - x0) + z0
+            ])
+
+            # print("result", result)
+            # 选择近的那一个作为交点
+            result_distance = [get_distance(center, r) for r in result]
+            result_point = result[1] if result_distance[0] > result_distance[1] else result[0]
+            # 抛物面法向量
+            n_surface = np.array([
+                result_point[0] / (2 * f),
+                result_point[1] / (2 * f),
+                -1
+            ])
+            # 标准化向量
+            n_surface, n_board = np.abs(normalizing(n_surface)), np.abs(normalizing(n_board))
+            # 求点积
+            dot = np.dot(n_surface, n_board)
+            loss_sum += dot
+
+        return (1 - (loss_sum / self.count_nodes)) * weight
 
     # 计算整体误差
     def get_loss(self) -> float:
-        return self.get_expand_loss(weight=self.loss_weights[0]) + self.get_padding_loss(
-            weight=self.loss_weights[0]) + self.get_fitting_loss(weight=self.loss_weights[1]) + self.get_light_loss(
-            weight=self.loss_weights[2])
+        return self.get_expand_loss(weight=self.loss_weights[0]) + \
+               self.get_padding_loss(weight=self.loss_weights[0]) + \
+               self.get_fitting_loss(weight=self.loss_weights[1]) + \
+               self.get_light_loss(weight=self.loss_weights[2])
 
     def get_board(self, triangle) -> np.ndarray:
         return np.array([self.position[self.index[triangle[i]]] for i in range(3)])
@@ -147,7 +225,7 @@ class FAST(nn.Module):
         return [self.get_board(triangle) for triangle in self.triangles_data]
 
     # 取得变换后经过 z 轴的板子作为顶点参考板
-    def get_center_board(self) -> np.ndarray:
+    def get_bottom_board(self) -> np.ndarray:
         boards = self.get_boards()
         for board in boards:
             if is_in_board(board):
@@ -156,21 +234,30 @@ class FAST(nn.Module):
 
     # 得到抛物面的顶点
     def get_vertex(self) -> float:
-        board = self.get_center_board()
+        board = self.get_bottom_board()
         if board is None:
             raise Exception("取得顶点参考板错误！")
         plane = triangle_to_plane(board)
         return -plane[3] / plane[2]
 
-    # 计算顶点位置
+    # 计算主索节点位置
     def forward(self):
         self.update_position()
-        return self.position
+        loss = self.get_loss()
+        return loss
 
 
-def main():
+def main(alpha: float, beta: float, learning_rate: float = 1e-4):
     model = FAST()
+    # TODO: 旋转模型
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    for i in range(1000):
+        optimizer.zero_grad()
+        loss = model()
+        print(loss.item())
+        loss.backward()
+        optimizer.step()
 
 
 if __name__ == '__main__':
-    main()
+    main(0, 0)

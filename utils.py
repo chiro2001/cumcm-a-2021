@@ -14,7 +14,14 @@ def get_unit_vector(pt1: np.ndarray, pt2: np.ndarray) -> np.ndarray:
 def triangle_to_plane(points: np.ndarray) -> np.ndarray:
     # points = [nodes_data[code]['position'] for code in triangle]
     # Ax + By + Cz + D = 0
-    A = (points[2][1] - points[0][1]) * (points[2][2] - points[0][2]) - \
+    # A = (points[2][1] - points[0][1]) * (points[2][2] - points[0][2]) - \
+    #     (points[1][2] - points[0][2]) * (points[2][1] - points[0][1])
+    # B = (points[2][0] - points[0][0]) * (points[1][2] - points[0][2]) - \
+    #     (points[1][0] - points[0][0]) * (points[2][2] - points[0][2])
+    # C = (points[1][0] - points[0][0]) * (points[2][1] - points[0][1]) - \
+    #     (points[2][0] - points[0][0]) * (points[1][1] - points[0][1])
+    # D = -(A * points[0][0] + B * points[0][1] + C * points[0][2])
+    A = (points[1][1] - points[0][1]) * (points[2][2] - points[0][2]) - \
         (points[1][2] - points[0][2]) * (points[2][1] - points[0][1])
     B = (points[2][0] - points[0][0]) * (points[1][2] - points[0][2]) - \
         (points[1][0] - points[0][0]) * (points[2][2] - points[0][2])
@@ -83,13 +90,18 @@ def is_in_board(points: np.ndarray) -> bool:
     plane = triangle_to_plane(points)
     # (0, 0, z): C * z + D = 0, z = - D / C
     z = - plane[3] / plane[2]
-    return sum([*([within(0, [np.min(points.T[i]), np.max(points.T[i])])] for i in range(2)),
+    return sum([within(0, [np.min(points.T[0]), np.max(points.T[0])]),
+                within(0, [np.min(points.T[1]), np.max(points.T[1])]),
                 within(z, [np.min(points.T[2]), np.max(points.T[2])])]) == 3
 
 
 def get_board_center(board: np.ndarray) -> np.ndarray:
-    return np.sum(board) / len(np.ndarray)
+    return (board[0] + board[1] + board[2]) / len(board)
 
 
 def get_distance(p1: np.ndarray, p2: np.ndarray) -> float:
     return np.sqrt(np.sum((p2 - p1) ** 2))
+
+
+def normalizing(n: np.ndarray) -> np.ndarray:
+    return n / np.sqrt(np.sum(n ** 2))

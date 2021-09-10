@@ -1,3 +1,4 @@
+import sys
 import pandas as pd
 import matplotlib.pyplot as plt
 from torch import nn
@@ -10,9 +11,10 @@ class FAST(nn.Module):
     R = 300
     F = 0.466
 
-    def __init__(self):
+    def __init__(self, device: torch.device):
         super(FAST, self).__init__()
 
+        self.device: torch.device = device
         self.count_nodes: int = None
         self.count_triangles: int = None
         self.expands: nn.Parameter = None
@@ -24,7 +26,7 @@ class FAST(nn.Module):
         self.name_list: list = []
         self.index: dict = {}
         self.paddings_raw: list = None
-        self.unit_vectors: torch.Tensor = []
+        self.unit_vectors: torch.Tensor = None
 
         self.loss_weights = torch.tensor([1, 1, 1])
 
@@ -93,6 +95,7 @@ class FAST(nn.Module):
         self.count_nodes = len(list(nodes_data.keys()))
         self.unit_vectors = torch.from_numpy(np.array(
             [get_unit_vector(self.position_raw[i], self.actuator_base[i]).numpy() for i in range(self.count_nodes)]).T)
+        self.unit_vectors.to(self.device)
         # 每个节点的伸展长度
         self.expands = nn.Parameter(torch.zeros(self.count_nodes, dtype=torch.float64))
 
@@ -292,8 +295,7 @@ def draw(model: FAST, wait_time: int = 0):
 
 def main(alpha: float, beta: float, learning_rate: float = 1e-4, plot_picture: bool = True, device: str = None):
     device = torch.device(device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu"))
-    model = FAST()
-    model.to(device)
+    model = FAST(device=device)
     # TODO: 旋转模型
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     for i in range(1000):
@@ -308,4 +310,5 @@ def main(alpha: float, beta: float, learning_rate: float = 1e-4, plot_picture: b
 
 
 if __name__ == '__main__':
-    main(0, 0, learning_rate=1, plot_picture=False)
+    device_ = sys.argv[-1] if len(sys.argv) == 2 else None
+    main(0, 0, learning_rate=1, plot_picture=False, device=device_)

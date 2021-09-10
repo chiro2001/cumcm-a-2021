@@ -290,8 +290,10 @@ def draw(model: FAST, wait_time: int = 0):
         plt.draw()
 
 
-def main(alpha: float, beta: float, learning_rate: float = 1e-4, plot_picture: bool = True):
+def main(alpha: float, beta: float, learning_rate: float = 1e-4, plot_picture: bool = True, device: str = None):
+    device = torch.device(device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu"))
     model = FAST()
+    model.to(device)
     # TODO: 旋转模型
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     for i in range(1000):
@@ -306,4 +308,4 @@ def main(alpha: float, beta: float, learning_rate: float = 1e-4, plot_picture: b
 
 
 if __name__ == '__main__':
-    main(0, 0, learning_rate=1)
+    main(0, 0, learning_rate=1, plot_picture=False)

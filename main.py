@@ -87,10 +87,6 @@ class FAST(nn.Module):
         # 每个节点的伸展长度
         self.expands = nn.Parameter(torch.tensor(np.zeros(len(list(nodes_data.keys())))))
 
-    def forward(self):
-        self.update_position()
-        return self.position
-
     # 计算在当前伸缩值状态下，主索节点的位置
     def update_position(self):
         for i in range(self.count_nodes):
@@ -134,12 +130,42 @@ class FAST(nn.Module):
 
     # 得到拟合精度误差
     def get_fitting_loss(self, weight: float = 1) -> float:
+        for triangle in self.triangles_data:
+            board = self.get_board(triangle)
         return 0 * weight
 
+    # 计算整体误差
     def get_loss(self) -> float:
         return self.get_expand_loss(weight=self.loss_weights[0]) + self.get_padding_loss(
             weight=self.loss_weights[0]) + self.get_fitting_loss(weight=self.loss_weights[1]) + self.get_light_loss(
             weight=self.loss_weights[2])
+
+    def get_board(self, triangle) -> np.ndarray:
+        return np.array([self.position[self.index[triangle[i]]] for i in range(3)])
+
+    def get_boards(self) -> list:
+        return [self.get_board(triangle) for triangle in self.triangles_data]
+
+    # 取得变换后经过 z 轴的板子作为顶点参考板
+    def get_center_board(self) -> np.ndarray:
+        boards = self.get_boards()
+        for board in boards:
+            if is_in_board(board):
+                return board
+        return None
+
+    # 得到抛物面的顶点
+    def get_vertex(self) -> float:
+        board = self.get_center_board()
+        if board is None:
+            raise Exception("取得顶点参考板错误！")
+        plane = triangle_to_plane(board)
+        return -plane[3] / plane[2]
+
+    # 计算顶点位置
+    def forward(self):
+        self.update_position()
+        return self.position
 
 
 def main():

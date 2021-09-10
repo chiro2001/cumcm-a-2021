@@ -1,5 +1,6 @@
 import numpy as np
 import sympy
+import copy
 
 
 # 拿到单位方向向量(pt1 -> pt2)
@@ -70,6 +71,24 @@ def get_rotation_matrix(yaw: float, pitch: float, roll: float):
          cos(pitch) * sin(roll),
          cos(pitch) * cos(roll)]
     ])
+
+
+def within(val, range_):
+    r = copy.deepcopy(range_)
+    list.sort(r)
+    return r[0] <= val <= r[1]
+
+
+def is_in_board(points: np.ndarray) -> bool:
+    plane = triangle_to_plane(points)
+    # (0, 0, z): C * z + D = 0, z = - D / C
+    z = - plane[3] / plane[2]
+    return sum([*([within(0, [np.min(points.T[i]), np.max(points.T[i])])] for i in range(2)),
+                within(z, [np.min(points.T[2]), np.max(points.T[2])])]) == 3
+
+
+def get_board_center(board: np.ndarray) -> np.ndarray:
+    return np.sum(board) / len(np.ndarray)
 
 
 def get_distance(p1: np.ndarray, p2: np.ndarray) -> float:

@@ -34,6 +34,7 @@ data3 = pd.read_csv("data/附件3.csv", encoding='ANSI')
 for d in data3.itertuples():
     triangles_data.append(tuple(d[1:]))
 
+
 # print(triangles_data)
 
 
@@ -49,7 +50,7 @@ def draw_points(points: np.ndarray = None, nodes_data_: dict = nodes_data):
     points2 = to_points(nodes_data_=nodes_data_, dict_key='actuactor_head')
     points3 = to_points(nodes_data_=nodes_data_, dict_key='actuactor_base')
 
-    # m = get_rotation_matrix(np.pi / 6, np.pi / 4, np.pi / 12)
+    m = get_rotation_matrix(np.pi / 6, np.pi / 4, np.pi / 12)
     # m = get_rotation_matrix(0, 0, np.pi / 12)
     # m = get_rotation_matrix(a, b, c)
 
@@ -57,7 +58,7 @@ def draw_points(points: np.ndarray = None, nodes_data_: dict = nodes_data):
     # np.zeros((3, 3)) * np.zeros((100, 3)).T
     # 矩阵乘法用 np.dot...
     points = np.dot(points, m)
-    
+
     ax.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
     ax.scatter3D(points2.T[0], points2.T[1], points2.T[2], c="c", marker='.')
     ax.scatter3D(points3.T[0], points3.T[1], points3.T[2], c='m', marker='.')
@@ -82,15 +83,15 @@ def to_points(nodes_data_: dict = nodes_data, dict_key: str = 'position') -> np.
         points.append(node[dict_key])
     return np.array(points)
 
+
 def do_rotation(alpha: float, beta: float) -> np.ndarray:
     m = get_rotation_matrix(0, alpha, beta)
-    
 
 
 for i in range(0, 8):
     # c -> beta
     # b -> alpha ?
-    draw_points(b = 0, c = 0, a = i * np.pi / 8)
+    draw_points(b=0, c=0, a=i * np.pi / 8)
 # import random
 # for name in nodes_data:
 #   nodes_data[name]['expand'] = 20 * random.random()

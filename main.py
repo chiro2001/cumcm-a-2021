@@ -1,5 +1,5 @@
 import pandas as pd
-import torch
+import matplotlib.pyplot as plt
 from torch import nn
 import torch.optim as optim
 from utils import *
@@ -16,28 +16,28 @@ class FAST(nn.Module):
         self.count_nodes: int = None
         self.count_triangles: int = None
         self.expands: nn.Parameter = None
-        self.position_raw: np.ndarray = None
-        self.position: np.ndarray = None
-        self.actuator_head: np.ndarray = None
-        self.actuator_base: np.ndarray = None
-        self.triangles_data: np.ndarray = None
+        self.position_raw = None
+        self.position: torch.Tensor = None
+        self.actuator_head: torch.Tensor = None
+        self.actuator_base: torch.Tensor = None
+        self.triangles_data: list = None
         self.name_list: list = []
         self.index: dict = {}
-        self.paddings_raw: np.ndarray = None
-        self.unit_vectors: np.ndarray = []
+        self.paddings_raw: list = None
+        self.unit_vectors: torch.Tensor = []
 
-        self.loss_weights: np.ndarray = np.array([1, 1, 1])
+        self.loss_weights = torch.tensor([1, 1, 1])
 
         self.read_data()
 
         self.paddings_raw = self.get_paddings(source=self.position_raw)
 
-    def get_edge(self, node1: str, node2: str, source: np.ndarray) -> float:
+    def get_edge(self, node1: str, node2: str, source) -> float:
         return get_distance(source[self.index[node1]], source[self.index[node2]])
 
     # 得到点与点的间隔
     # 因为不知道具体边的关系，就按照三角形三条边考虑吧，数据（大约）是原来三倍
-    def get_paddings(self, source: np.ndarray = None) -> np.ndarray:
+    def get_paddings(self, source=None):
         source = source if source is not None else self.position_raw
         paddings = []
         for triangle in self.triangles_data:
@@ -55,8 +55,8 @@ class FAST(nn.Module):
         for d in data1.itertuples():
             nodes_data[d[1]] = {
                 # 'position': tuple(d[2:]),
-                'position_raw': np.array(d[2:]),
-                'position': np.array(d[2:]),
+                'position_raw': d[2:],
+                'position': d[2:],
                 # 伸缩量，即所有需要求解的变量
                 'expand': 0
             }
@@ -67,8 +67,8 @@ class FAST(nn.Module):
         data2 = pd.read_csv("data/附件2.csv", encoding='ANSI')
         # print('data2:\n', data2)
         for d in data2.itertuples():
-            nodes_data[d[1]]['actuator_head'] = np.array(d[2:5])
-            nodes_data[d[1]]['actuator_base'] = np.array(d[5:8])
+            nodes_data[d[1]]['actuator_head'] = d[2:5]
+            nodes_data[d[1]]['actuator_base'] = d[5:8]
 
         # print(nodes_data)
 
@@ -83,21 +83,27 @@ class FAST(nn.Module):
         # 主索节点名称到下标号的映射
         self.name_list = list(nodes_data.keys())
         self.index = {self.name_list[i]: i for i in range(len(self.name_list))}
-        self.position_raw = [nodes_data[name]['position_raw'] for name in self.name_list]
-        self.position = np.array([nodes_data[name]['position'] for name in self.name_list])
-        self.actuator_head = np.array([nodes_data[name]['actuator_head'] for name in self.name_list])
-        self.actuator_base = np.array([nodes_data[name]['actuator_base'] for name in self.name_list])
+        self.position_raw = torch.from_numpy(np.array([nodes_data[name]['position_raw'] for name in self.name_list]))
+        # print([nodes_data[name]['position'] for name in self.name_list])
+        self.position = torch.from_numpy(np.array([nodes_data[name]['position'] for name in self.name_list]))
+        self.actuator_head = torch.from_numpy(np.array([nodes_data[name]['actuator_head'] for name in self.name_list]))
+        self.actuator_base = torch.from_numpy(np.array([nodes_data[name]['actuator_base'] for name in self.name_list]))
         self.triangles_data = triangles_data
         self.count_triangles = len(triangles_data)
         self.count_nodes = len(list(nodes_data.keys()))
-        self.unit_vectors = np.array([get_unit_vector(self.position_raw[i], self.actuator_base[i]) for i in
-                                      range(self.count_nodes)])
+        self.unit_vectors = torch.from_numpy(np.array(
+            [get_unit_vector(self.position_raw[i], self.actuator_base[i]).numpy() for i in range(self.count_nodes)]).T)
         # 每个节点的伸展长度
-        self.expands = nn.Parameter(torch.tensor(np.zeros(len(list(nodes_data.keys())))))
+        self.expands = nn.Parameter(torch.zeros(self.count_nodes, dtype=torch.float64))
 
     # 计算在当前伸缩值状态下，主索节点的位置
     def update_position(self):
-        self.position = self.position_raw + np.dot(self.unit_vectors.T, self.expands.detach().numpy())
+        # print(self.position_raw, self.unit_vectors, self.expands)
+        # print(torch.dot(self.unit_vectors, self.expands))
+        # print(self.unit_vectors.shape, self.expands.shape)
+        # self.position = self.position_raw + torch.dot(self.unit_vectors,
+        #                                               torch.reshape(self.expands, (len(self.expands), 1)))
+        self.position = self.position_raw + torch.matmul(self.unit_vectors, self.expands)
         # for i in range(self.count_nodes):
         #     self.position[i] = self.position_raw[i] + self.unit_vectors[i] * self.expands[i]
 
@@ -106,31 +112,33 @@ class FAST(nn.Module):
         return torch.max(self.expands) > 0.6 or torch.min(self.expands) < -0.6
 
     # 判断当前伸缩条件能否满足间隔限制
-    def is_padding_legal(self, paddings: np.ndarray = None) -> bool:
+    def is_padding_legal(self, paddings=None) -> bool:
         paddings = self.get_paddings(source=self.position) if paddings is None else paddings
-        return np.sum([
-            np.sum([
-                (1 if (np.abs(paddings[i][j] - self.paddings_raw[i][j]) < 0.0007 * self.paddings_raw[i][j]) else 0) for
-                j in range(3)
-            ]) for i in range(len(paddings))
-        ]) == 0
+        return torch.sum(torch.tensor([
+            torch.sum(torch.tensor([
+                (1 if (torch.abs(paddings[i][j] - self.paddings_raw[i][j]) < 0.0007 * self.paddings_raw[i][j]) else 0)
+                for j in range(3)
+            ])) for i in range(len(paddings))
+        ])) == 0
 
     # 得到间隔误差
     def get_padding_loss(self, weight: float = 1) -> float:
         paddings = self.get_paddings(source=self.position)
+        length = len(paddings)
         if self.is_padding_legal(paddings=paddings):
             return 0
-        return np.sum([
+        return torch.sum(torch.from_numpy(
             np.array([
-                np.sum([
+                torch.sum(torch.tensor([
                     (paddings[i][j] - self.paddings_raw[i][j]) ** 2 for j in range(3)
-                ]) for i in range(len(paddings))
+                ])).numpy() for i in range(length)
             ]) ** 2
-        ]) * weight
+        )) * weight
 
     # 得到伸缩误差
     def get_expand_loss(self, weight: float = 1) -> float:
-        return np.sum([0 if (-0.6 <= expand <= 0.6) else (np.abs(expand) - 0.6) for expand in self.expands]) * weight
+        return torch.sum(torch.tensor(
+            [0 if (-0.6 <= expand <= 0.6) else (torch.abs(expand) - 0.6) for expand in self.expands])) * weight
 
     # 得到光通量误差
     def get_light_loss(self, weight: float = 1) -> float:
@@ -143,11 +151,11 @@ class FAST(nn.Module):
         vertex = self.get_vertex()
         for triangle in self.triangles_data:
             board = self.get_board(triangle)
-            plane = triangle_to_plane(board)
+            n_plane, D = triangle_to_plane(board)
             # 反射板中心
             center = get_board_center(board)
             # 反射板法向量
-            n_board = plane[:-1]
+            n_board = n_plane
             # 抛物面方程
             # z = x**2 / (4 * f) + y**2 / (4 * f) + h,
             # zdx = x / (2 * f)
@@ -156,15 +164,16 @@ class FAST(nn.Module):
             # h = vertex,
             h = vertex
             # f = |h| - (1 - F) * R
-            f = np.abs(h) - (1 - FAST.F) * FAST.R
+            f = torch.abs(h) - (1 - FAST.F) * FAST.R
             # 解方程求反射板法线和抛物面交点
             # (x-x0) / A == (y-y0) / B == (z-z0) / C
             x0, y0, z0 = center
             A, B, C = n_board
             if A == 0.0:
-                print("!!", triangle)
+                # print("!!", triangle)
                 # continue
-                A += 1e-6
+                # A += 1e-6
+                A = A + 1e-6
 
             # x, y, z = sympy.Symbol('x'), sympy.Symbol('y'), sympy.Symbol('z')
             # result = sympy.nonlinsolve([
@@ -174,20 +183,19 @@ class FAST(nn.Module):
             # ], [x, y, z])
             # result = [tuple(r) for r in result]
 
-            a = B**2 / (4 * f * A**2) + 1 / (4 * f)
-            b = B * y0 / (2 * A * f) - C / A - B**2 * x0 / (2 * f * A**2)
-            c = B**2 * x0**2 / (4 * f * A**2) - B * y0 * x0 / (2 * A * f) + y0**2 / (4 * f) + h - C / A * x0 + z0
-            if A == 0.0:
-                print('!!')
+            a = B ** 2 / (4 * f * A ** 2) + 1 / (4 * f)
+            b = B * y0 / (2 * A * f) - C / A - B ** 2 * x0 / (2 * f * A ** 2)
+            c = B ** 2 * x0 ** 2 / (4 * f * A ** 2) - B * y0 * x0 / (2 * A * f) + y0 ** 2 / (
+                    4 * f) + h + C / A * x0 - z0
             result = [None, None]
-            x = (-b + np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
-            result[0] = np.array([
+            x = (-b + torch.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
+            result[0] = torch.tensor([
                 x,
                 B / A * (x - x0) + y0,
                 C / A * (x - x0) + z0
             ])
-            x = (-b - np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
-            result[1] = np.array([
+            x = (-b - torch.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
+            result[1] = torch.tensor([
                 x,
                 B / A * (x - x0) + y0,
                 C / A * (x - x0) + z0
@@ -198,18 +206,19 @@ class FAST(nn.Module):
             result_distance = [get_distance(center, r) for r in result]
             result_point = result[1] if result_distance[0] > result_distance[1] else result[0]
             # 抛物面法向量
-            n_surface = np.array([
+            n_surface = torch.tensor([
                 result_point[0] / (2 * f),
                 result_point[1] / (2 * f),
                 -1
             ])
             # 标准化向量
-            n_surface, n_board = np.abs(normalizing(n_surface)), np.abs(normalizing(n_board))
+            n_surface, n_board = torch.abs(normalizing(n_surface)), torch.abs(normalizing(n_board))
             # 求点积
-            dot = np.dot(n_surface, n_board)
+            dot = torch.dot(n_surface, n_board)
             loss_sum += dot
 
-        return (1 - (loss_sum / self.count_nodes)) * weight
+        r = (1 - (loss_sum / self.count_triangles)) * weight
+        return r
 
     # 计算整体误差
     def get_loss(self) -> float:
@@ -218,14 +227,17 @@ class FAST(nn.Module):
                self.get_fitting_loss(weight=self.loss_weights[1]) + \
                self.get_light_loss(weight=self.loss_weights[2])
 
-    def get_board(self, triangle) -> np.ndarray:
-        return np.array([self.position[self.index[triangle[i]]] for i in range(3)])
+    def get_board(self, triangle) -> torch.Tensor:
+        # return torch.from_numpy(np.array([self.position[self.index[triangle[i]]].detach().numpy() for i in range(3)]))
+        r = torch.stack([self.position[self.index[triangle[i]]] for i in range(3)])
+        return r
 
     def get_boards(self) -> list:
-        return [self.get_board(triangle) for triangle in self.triangles_data]
+        r = torch.stack([self.get_board(triangle) for triangle in self.triangles_data])
+        return r
 
     # 取得变换后经过 z 轴的板子作为顶点参考板
-    def get_bottom_board(self) -> np.ndarray:
+    def get_bottom_board(self):
         boards = self.get_boards()
         for board in boards:
             if is_in_board(board):
@@ -237,8 +249,8 @@ class FAST(nn.Module):
         board = self.get_bottom_board()
         if board is None:
             raise Exception("取得顶点参考板错误！")
-        plane = triangle_to_plane(board)
-        return -plane[3] / plane[2]
+        n, D = triangle_to_plane(board)
+        return -D / n[2]
 
     # 计算主索节点位置
     def forward(self):
@@ -247,17 +259,51 @@ class FAST(nn.Module):
         return loss
 
 
-def main(alpha: float, beta: float, learning_rate: float = 1e-4):
+g_fig = None
+
+
+# 绘制当前图像
+def draw(model: FAST, wait_time: int = 0):
+    global g_fig
+    if wait_time < 0:
+        if g_fig is not None:
+            try:
+                plt.close(g_fig)
+            except Exception as e:
+                print(e)
+
+    ax = plt.axes(projection='3d')
+    plt.xlim(-300, 300)
+    plt.ylim(-300, 300)
+    ax.set_zlim(-400, -100)
+
+    points = model.position.detach().numpy()
+    ax.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
+    if wait_time == 0:
+        plt.show()
+    elif 0 < wait_time:
+        g_fig = plt.figure(1)
+        plt.draw()
+        plt.pause(wait_time)
+        plt.close(g_fig)
+    elif wait_time < 0:
+        plt.draw()
+
+
+def main(alpha: float, beta: float, learning_rate: float = 1e-4, plot_picture: bool = True):
     model = FAST()
     # TODO: 旋转模型
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     for i in range(1000):
         optimizer.zero_grad()
         loss = model()
-        print(loss.item())
+        print(f'loss: {loss.item()}')
         loss.backward()
         optimizer.step()
+        print(model.expands)
+        if plot_picture:
+            draw(model)
 
 
 if __name__ == '__main__':
-    main(0, 0)
+    main(0, 0, learning_rate=1)

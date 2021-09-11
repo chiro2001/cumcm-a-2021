@@ -3,14 +3,13 @@ import pandas as pd
 import time
 import matplotlib.pyplot as plt
 from torch import nn
-from torch.functional import split
+import traceback
 import torch.optim as optim
 from tqdm import trange
 import threading
 from utils import *
 import cv2
 from base_logger import logger
-
 
 draw_threaded: bool = False
 
@@ -45,10 +44,24 @@ class FAST(nn.Module):
         self.unit_vectors: torch.Tensor = None
         self.boards: torch.Tensor = None
 
-        self.loss_weights: torch.Tensor = torch.tensor([5, 2e3, 5e-4]).to(self.device)
-        # self.vertex: nn.Parameter = nn.Parameter(torch.tensor(-FAST.R)).to(self.device)
+        self.loss_weights: torch.Tensor = torch.tensor([5, 2e3, 1e-4]).to(self.device)
+        self.vertex: nn.Parameter = nn.Parameter(torch.tensor(-FAST.R)).to(self.device)
 
         self.read_data()
+
+        self.ring_selection = []
+        step = 5
+        pos = 1
+        pos_last = 0
+        while pos < self.count_nodes:
+            self.ring_selection.append([pos_last, min(pos, self.count_nodes)])
+            pos_last = pos
+            pos += step
+            step += 5
+        # print(self.ring_selection)
+        self.count_rings = len(self.ring_selection)
+
+        self.expands = nn.Parameter(torch.zeros(self.count_rings, dtype=torch.float64))
 
     def get_edge(self, node1: str, node2: str, source) -> float:
         return get_distance(source[self.index[node1]], source[self.index[node2]])
@@ -120,10 +133,10 @@ class FAST(nn.Module):
             [get_unit_vector(self.position_raw[i], self.actuator_base[i]).cpu().numpy() for i in
              range(self.count_nodes)])).to(self.device)
         # 每个节点的伸展长度
-        if self.init_randomly:
-            self.expands = nn.Parameter(torch.rand(self.count_nodes, dtype=torch.float64) * 1.2 - 0.6)
-        else:
-            self.expands = nn.Parameter(torch.zeros(self.count_nodes, dtype=torch.float64))
+        # if self.init_randomly:
+        #     self.expands = nn.Parameter(torch.rand(self.count_nodes, dtype=torch.float64) * 1.2 - 0.6)
+        # else:
+        #     self.expands = nn.Parameter(torch.zeros(self.count_nodes, dtype=torch.float64))
         # 准备好 boards 数据
         self.boards = self.get_boards().to(self.device)
         self.paddings_raw = self.get_paddings(source=self.position_raw)
@@ -146,7 +159,11 @@ class FAST(nn.Module):
         # self.position = self.position_raw + torch.dot(self.unit_vectors,
         #                                               torch.reshape(self.expands, (len(self.expands), 1)))
         # print("Why!")
-        m = self.unit_vectors * expand_source.reshape((self.count_nodes, 1))
+        expand_temp = torch.zeros(self.count_nodes, device=self.device, dtype=torch.float64)
+        for r in range(len(self.ring_selection)):
+            ring = self.ring_selection[r]
+            expand_temp[ring[0] : ring[1]] = expand_source[r]
+        m = self.unit_vectors * expand_temp.reshape((self.count_nodes, 1))
         # m = torch.matmul(self.unit_vectors, self.expands)
         position = self.position_raw + m
         # print(self.position.shape)
@@ -240,13 +257,13 @@ class FAST(nn.Module):
                 dot = torch.dot(n_plane, m)
                 theta = torch.arccos(dot / torch.sqrt(torch.sum(n_plane ** 2)))
                 # -> 0 ?
-                s1 = S * (1 - torch.cos(theta * 2))
+                s1 = S * torch.cos(theta * 2)
                 count_surface += 1
                 sum_surface += s1
             else:
                 continue
 
-        return (sum_surface - 1100) * weight
+        return (count_surface * S - sum_surface) * weight
 
     # 得到拟合精度误差
     def get_fitting_loss(self, weight: float = 1) -> torch.Tensor:
@@ -322,15 +339,15 @@ class FAST(nn.Module):
                 # 求点积
                 dot = torch.dot(n_surface, n_board)
                 loss_sum += dot
-                if index_node == 0:
-                    logger.warning(f"A0: 1 - dot = {1 - dot.clone().detach().item()}")
+                # if index_node == 0:
+                #     logger.warning(f"A0: 1 - dot = {1 - dot.clone().detach().item()}")
             else:
                 # loss_sum += 1
                 # count_surface += 1
                 # print(board.transpose(0, 1)[0].max() ** 2 + board.transpose(0, 1)[1].max() ** 2)
                 continue
 
-        logger.warning(f'ALL: Sigma dot = {(loss_sum / count_surface)}')
+        # logger.warning(f'ALL: 1 -Sigma dot = {1 - (loss_sum / count_surface)}')
         r = (1 - (loss_sum / count_surface)) * weight
         return r
 
@@ -384,9 +401,8 @@ class FAST(nn.Module):
         # print('-z =', -z, 'R =', FAST.R)
         # return z
 
-        # return self.vertex
-        return torch.tensor(-300.4)
-
+        return self.vertex
+        # return torch.tensor(-300.4)
 
     # 整体旋转整个模型
     def rotate(self, alpha: float, beta: float, unit_degree: bool = False):
@@ -504,7 +520,7 @@ def draw_thread(source: torch.Tensor = None):
             ax.scatter3D(points.T[0], points.T[1], points.T[2], c=c, marker='.')
 
         draw_it(expands, 'g')
-        draw_it(expands_raw, 'm')
+        # draw_it(expands_raw, 'm')
 
         # ax2.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
         # X, Y = np.meshgrid(points.T[0], points.T[1])
@@ -555,8 +571,8 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: b
     # test_rotation(model)
     model.rotate(alpha, beta, unit_degree=True)
     # test_triangle_order(model)
-    test_r2(model)
-    exit()
+    # test_r2(model)
+    # exit()
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     try:
@@ -564,7 +580,7 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: b
             optimizer.zero_grad()
             loss = model()
             logger.info(f'epoch {i} loss: {loss.item()}')
-            # logger.warning(f"vertex: {model.vertex.clone().cpu().detach().item()}")
+            logger.warning(f"vertex: {model.vertex.clone().cpu().detach().item()}")
             if not model.is_expands_legal():
                 logger.warning(f'不满足伸缩限制！共{model.count_illegal_expands()}')
             if not model.is_padding_legal():
@@ -578,24 +594,32 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: b
         pass
     g_exit = True
     # 进行一个文件的保存
-    logger.info(f'Saving expands data to: {out}')
-    writer = pd.ExcelWriter(out, engine='xlsxwriter')
-    df = pd.DataFrame({
-        '对应主索节点编号': model.name_list,
-        '伸缩量（米）': model.expands.cpu().detach().numpy(),
-        '': ['' for _ in range(model.count_nodes)],
-        '注：至少保留3位小数': ['' for _ in range(model.count_nodes)]
-    })
-    df.to_excel(writer, sheet_name='Sheet1', index=False)
-    worksheet = writer.sheets['Sheet1']
-    worksheet.set_column("A:A", 4)
-    worksheet.set_column("B:B", 15)
-    worksheet.set_column("D:D", 50)
-    writer.close()
+    try:
+        logger.info(f'Saving expands data to: {out}')
+        writer = pd.ExcelWriter(out, engine='xlsxwriter')
+        df = pd.DataFrame({
+            '对应主索节点编号': model.name_list,
+            '伸缩量（米）': model.expands.cpu().detach().numpy(),
+            '': ['' for _ in range(model.count_nodes)],
+            '注：至少保留3位小数': ['' for _ in range(model.count_nodes)]
+        })
+        df.to_excel(writer, sheet_name='Sheet1', index=False)
+        worksheet = writer.sheets['Sheet1']
+        worksheet.set_column("A:A", 4)
+        worksheet.set_column("B:B", 15)
+        worksheet.set_column("D:D", 50)
+        writer.close()
+    except Exception as e:
+        logger.error('保存数据文件出错: %s' % str(e))
+        traceback.print_exc()
     # 进行一个模型的保存
-    if module_path is not None:
-        logger.info(f'Saving module weights to: {module_path}')
-        torch.save(model.state_dict(), module_path)
+    try:
+        if module_path is not None:
+            logger.info(f'Saving module weights to: {module_path}')
+            torch.save(model.state_dict(), module_path)
+    except Exception as e:
+        logger.error('保存模型文件出错: %s' % str(e))
+        traceback.print_exc()
     logger.info('ALL DONE')
 
 
@@ -619,6 +643,7 @@ def test_triangle_order(model: FAST):
         cv2.waitKey(1)
     cv2.waitKey(0)
 
+
 def test_r2(model: FAST):
     position_raw = model.position_raw.clone().cpu().detach().numpy()
     step = 1
@@ -639,10 +664,10 @@ def test_r2(model: FAST):
         pos += step
         step += 5
     print('num[r] =', len(splits))
-        
+
     # r2 = np.array([np.sum((position_raw[i] - [0, 0, -300.4]) ** 2) / (30 * i) for i in range(len(position_raw))])
     # r2 = np.array([(i + 10) / 500 + position_raw[i][2] / (((i + 1))) for i in range(len(position_raw))])
-    
+
     # plt.plot([i for i in range(len(r2))], r2)
     # plt.plot([i for i in range(len(position_raw))], r2)
     plt.show()

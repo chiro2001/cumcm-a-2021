@@ -101,7 +101,7 @@ def is_in_board(points: torch.Tensor) -> bool:
     n, D = triangle_to_plane(points)
     # (0, 0, z): C * z + D = 0, z = - D / C
     z = - D / n[2]
-    z = z.detach().numpy()
+    # z = z.detach().numpy()
     # return sum([within(0, [torch.min(points.T[0]), torch.max(points.T[0])]),
     #             within(0, [torch.min(points.T[1]), torch.max(points.T[1])]),
     #             within(z, [torch.min(points.T[2]), torch.max(points.T[2])])]) == 3
@@ -109,7 +109,8 @@ def is_in_board(points: torch.Tensor) -> bool:
     # return sum([within(0, [torch.min(points.transpose(0, 1)[0]), torch.max(points.transpose(0, 1)[0])]),
     #             within(0, [torch.min(points.transpose(0, 1)[1]), torch.max(points.transpose(0, 1)[1])]),
     #             within(z, [torch.min(points.transpose(0, 1)[2]), torch.max(points.transpose(0, 1)[2])])]) == 3
-    p = points.detach().numpy()
+    # p = points.detach().numpy()
+    p = points
     return sum([within(0, [min([p[0][0], p[1][0], p[2][0]]),
                            max([p[0][0], p[1][0], p[2][0]])]),
                 within(0, [min([p[0][1], p[1][0], p[2][1]]),

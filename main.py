@@ -34,6 +34,9 @@ class FAST(nn.Module):
 
         self.paddings_raw = self.get_paddings(source=self.position_raw)
 
+        self.to(self.device)
+        # print(self.expands, self.unit_vectors)
+
     def get_edge(self, node1: str, node2: str, source) -> float:
         return get_distance(source[self.index[node1]], source[self.index[node2]])
 
@@ -85,24 +88,24 @@ class FAST(nn.Module):
         # 主索节点名称到下标号的映射
         self.name_list = list(nodes_data.keys())
         self.index = {self.name_list[i]: i for i in range(len(self.name_list))}
-        self.position_raw = torch.from_numpy(np.array([nodes_data[name]['position_raw'] for name in self.name_list]))
+        self.position_raw = torch.from_numpy(np.array([nodes_data[name]['position_raw'] for name in self.name_list])).to(self.device)
         # print([nodes_data[name]['position'] for name in self.name_list])
-        self.position = torch.from_numpy(np.array([nodes_data[name]['position'] for name in self.name_list]))
-        self.actuator_head = torch.from_numpy(np.array([nodes_data[name]['actuator_head'] for name in self.name_list]))
-        self.actuator_base = torch.from_numpy(np.array([nodes_data[name]['actuator_base'] for name in self.name_list]))
+        self.position = torch.from_numpy(np.array([nodes_data[name]['position'] for name in self.name_list])).to(self.device)
+        self.actuator_head = torch.from_numpy(np.array([nodes_data[name]['actuator_head'] for name in self.name_list])).to(self.device)
+        self.actuator_base = torch.from_numpy(np.array([nodes_data[name]['actuator_base'] for name in self.name_list])).to(self.device)
         self.triangles_data = triangles_data
         self.count_triangles = len(triangles_data)
         self.count_nodes = len(list(nodes_data.keys()))
         self.unit_vectors = torch.from_numpy(np.array(
-            [get_unit_vector(self.position_raw[i], self.actuator_base[i]).numpy() for i in range(self.count_nodes)]).T)
-        self.unit_vectors.to(self.device)
+            [get_unit_vector(self.position_raw[i], self.actuator_base[i]).cpu().numpy() for i in range(self.count_nodes)]).T).to(self.device)
+        # self.unit_vectors = self.unit_vectors.to(self.device)
         # 每个节点的伸展长度
         self.expands = nn.Parameter(torch.zeros(self.count_nodes, dtype=torch.float64))
 
     # 计算在当前伸缩值状态下，主索节点的位置
     def update_position(self):
         # print(self.position_raw, self.unit_vectors, self.expands)
-        # print(torch.dot(self.unit_vectors, self.expands))
+        # print(self.unit_vectors, self.expands)
         # print(self.unit_vectors.shape, self.expands.shape)
         # self.position = self.position_raw + torch.dot(self.unit_vectors,
         #                                               torch.reshape(self.expands, (len(self.expands), 1)))
@@ -196,13 +199,13 @@ class FAST(nn.Module):
                 x,
                 B / A * (x - x0) + y0,
                 C / A * (x - x0) + z0
-            ])
+            ]).to(self.device)
             x = (-b - torch.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
             result[1] = torch.tensor([
                 x,
                 B / A * (x - x0) + y0,
                 C / A * (x - x0) + z0
-            ])
+            ]).to(self.device)
 
             # print("result", result)
             # 选择近的那一个作为交点
@@ -213,7 +216,7 @@ class FAST(nn.Module):
                 result_point[0] / (2 * f),
                 result_point[1] / (2 * f),
                 -1
-            ])
+            ]).to(self.device)
             # 标准化向量
             n_surface, n_board = torch.abs(normalizing(n_surface)), torch.abs(normalizing(n_board))
             # 求点积
@@ -310,5 +313,6 @@ def main(alpha: float, beta: float, learning_rate: float = 1e-4, plot_picture: b
 
 
 if __name__ == '__main__':
-    device_ = sys.argv[-1] if len(sys.argv) == 2 else None
-    main(0, 0, learning_rate=1, plot_picture=False, device=device_)
+    device_ = sys.argv[1] if len(sys.argv) >= 2 else None
+    learning_rate_ = float(sys.argv[2]) if len(sys.argv) >= 3 else 1e-4
+    main(0, 0, learning_rate=learning_rate_, plot_picture=False, device=device_)

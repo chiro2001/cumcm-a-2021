@@ -7,6 +7,7 @@ import torch.optim as optim
 from tqdm import trange
 import threading
 from utils import *
+import cv2
 from base_logger import logger
 
 
@@ -194,7 +195,10 @@ class FAST(nn.Module):
             # 反射板中心
             center = get_board_center(board)
             # 在半径 150m 以外的板子不计算拟合精度误差
-            if center[0] ** 2 + center[1] ** 2 <= FAST.R_SURFACE ** 2:
+            # a = board.transpose(0, 1)
+            # b = board.transpose(0, 1)[0]
+            # c = board.transpose(0, 1)[0].max()
+            if board.transpose(0, 1)[0].max() ** 2 + board.transpose(0, 1)[1].max() ** 2 <= FAST.R_SURFACE ** 2:
                 count_surface += 1
                 n_plane, D = triangle_to_plane(board)
                 # 反射板法向量
@@ -326,9 +330,20 @@ g_exit: bool = False
 
 # 绘制当前图像
 def draw(model: FAST, **kwargs):
-    global g_frame, g_draw_kwargs
-    g_frame = model.expands.clone().cpu().detach().numpy()
-    g_draw_kwargs = kwargs
+    # global g_frame, g_draw_kwargs
+    # g_frame = model.expands.clone().cpu().detach().numpy()
+    # g_draw_kwargs = kwargs
+    frame = model.expands.clone().cpu().detach().numpy()
+    position = model.update_position(expand_source=frame)
+    size = (int(position.transpose(0, 1)[0].max() - position.transpose(0, 1)[0].min() + 1),
+            int(position.transpose(0, 1)[1].max() - position.transpose(0, 1)[1].min() + 1))
+    im = np.zeros(size, dtype=np.uint8)
+    for p in position:
+        pos = (int((p[0] - position.transpose(0, 1)[0].min())), int((p[1] - position.transpose(0, 1)[1].min())))
+        cv2.circle(im, center=pos, radius=5, color=(0xFF - int(0xFF * (p[2] - position.transpose(0, 1)[2].min()) / (
+                    position.transpose(0, 1)[2].max() - position.transpose(0, 1)[2].min()))), thickness=-1)
+    cv2.imshow('now', im)
+    cv2.waitKey(1)
 
 
 def draw_thread(source: torch.Tensor = None):
@@ -351,11 +366,11 @@ def draw_thread(source: torch.Tensor = None):
                     except Exception as e:
                         print(e)
 
-        ax = plt.axes(projection='3d')
-        ax.view_init(elev=10., azim=11)
+        # ax = plt.axes(projection='3d')
+        # ax.view_init(elev=10., azim=11)
         plt.xlim(-300, 300)
         plt.ylim(-300, 300)
-        ax.set_zlim(-400, -100)
+        # ax.set_zlim(-400, -100)
 
         if source is None:
             expands = g_frame * enlarge
@@ -364,7 +379,10 @@ def draw_thread(source: torch.Tensor = None):
             expands = source * enlarge
         position: torch.Tensor = model_.update_position(expand_source=expands)
         points = position.clone().cpu().numpy()
-        ax.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
+        # ax.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
+        X, Y = np.meshgrid(points.T[0], points.T[1])
+        Z = (1 - X / 2 + X ** 3 + Y ** 4) * np.exp(-X ** 2 - Y ** 2)
+        plt.contourf(X, Y, Z)
 
         if source is None:
             # if wait_time == 0:
@@ -408,6 +426,10 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, plot_pi
             optimizer.zero_grad()
             loss = model()
             logger.info(f'epoch {i} loss: {loss.item()}')
+            if not model.is_expands_legal():
+                logger.warning(f'不满足伸缩限制！')
+            if not model.is_padding_legal():
+                logger.warning(f'不满足间隔变化限制！')
             loss.backward()
             optimizer.step()
             print(model.expands)

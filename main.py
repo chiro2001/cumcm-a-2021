@@ -16,6 +16,7 @@ class FAST(nn.Module):
     R = 300 + 0.4
     F = 0.466
     R_SURFACE = 150
+    R_CABIN = 1.
 
     def __init__(self, **kwargs):
         super(FAST, self).__init__()
@@ -40,7 +41,7 @@ class FAST(nn.Module):
         self.unit_vectors: torch.Tensor = None
         self.boards: torch.Tensor = None
 
-        self.loss_weights: torch.Tensor = torch.tensor([1e-3, 1, 1]).to(self.device)
+        self.loss_weights: torch.Tensor = torch.tensor([1, 1e3, 1e-3]).to(self.device)
 
         self.read_data()
 
@@ -221,13 +222,28 @@ class FAST(nn.Module):
 
     # 得到光通量误差
     def get_light_loss(self, weight: float = 1) -> torch.Tensor:
-        return torch.tensor(0) * weight
+        m = torch.as_tensor([0, 0, 1], device=self.device, dtype=torch.float64)
+        S = np.pi * FAST.R_CABIN ** 2
+        count_surface = 0
+        sum_surface = 0
+        for board in self.boards:
+            if board.transpose(0, 1)[0].max() ** 2 + board.transpose(0, 1)[1].max() ** 2 <= FAST.R_SURFACE ** 2:
+                n_plane, D = triangle_to_plane(board)
+                dot = torch.dot(n_plane, m)
+                theta = torch.arccos(dot / torch.sqrt(torch.sum(n_plane ** 2)))
+                # -> 0 ?
+                s1 = S * (1 - torch.cos(theta * 2))
+                count_surface += 1
+                sum_surface += s1
+            else:
+                continue
+
+        return (sum_surface - 1100) * weight
 
     # 得到拟合精度误差
     def get_fitting_loss(self, weight: float = 1) -> torch.Tensor:
         loss_sum = 0
         count_surface = 0
-        self.boards = self.get_boards()
         # 得到底部顶点
         vertex = self.get_vertex()
         index = 0
@@ -303,9 +319,11 @@ class FAST(nn.Module):
 
     # 计算整体误差
     def get_loss(self) -> torch.Tensor:
+        self.boards = self.get_boards()
         loss_1 = self.get_expand_loss(weight=self.loss_weights[0])
         loss_2 = self.get_padding_loss(weight=self.loss_weights[0])
         loss_3 = self.get_fitting_loss(weight=self.loss_weights[1])
+        # loss_3 = torch.tensor(0).to(self.device) * self.loss_weights[1]
         loss_4 = self.get_light_loss(weight=self.loss_weights[2])
         loss_all = [loss_1, loss_2, loss_3, loss_4]
         logger.info(f"loss: {[x.item() for x in loss_all]}")
@@ -412,10 +430,15 @@ def draw_thread(source: torch.Tensor = None):
                     except Exception as e:
                         print(e)
 
+        if g_fig is None:
+            g_fig = plt.figure(1, figsize=(4, 4), dpi=80)
+
         plt.xlim(-300, 300)
         plt.ylim(-300, 300)
 
-        ax = plt.axes(projection='3d')
+        ax = plt.subplot(2, 2, 2, projection='3d')
+        plt.sca(ax)
+        # ax = plt.axes(projection='3d')
         ax.view_init(elev=10., azim=11)
         # ax.view_init(elev=90., azim=0)
         ax.set_zlim(-400, -100)
@@ -427,12 +450,25 @@ def draw_thread(source: torch.Tensor = None):
 
         if source is None:
             expands = g_frame * enlarge
+            expands_raw = g_frame
             g_frame = None
         else:
             expands = source * enlarge
-        position: torch.Tensor = model_.update_position(expand_source=expands)
-        points = position.clone().cpu().numpy()
-        ax.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
+            expands_raw = source
+
+        ax2 = plt.subplot(2, 2, 1)
+        plt.sca(ax2)
+        # 画 expands
+        plt.plot([i for i in range(len(expands_raw))], expands_raw)
+
+        def draw_it(expands_, c='g'):
+            position: torch.Tensor = model_.update_position(expand_source=expands_)
+            points = position.clone().cpu().numpy()
+            ax.scatter3D(points.T[0], points.T[1], points.T[2], c=c, marker='.')
+
+        draw_it(expands, 'g')
+        draw_it(expands_raw, 'm')
+
         # ax2.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
         # X, Y = np.meshgrid(points.T[0], points.T[1])
         # Z = (1 - X / 2 + X ** 3 + Y ** 4) * np.exp(-X ** 2 - Y ** 2)
@@ -442,14 +478,12 @@ def draw_thread(source: torch.Tensor = None):
             # if wait_time == 0:
             #     plt.show()
             if 0 <= wait_time:
-                if g_fig is None:
-                    g_fig = plt.figure(1, figsize=(4, 4), dpi=80)
                 plt.draw()
                 if wait_time > 0:
                     plt.pause(wait_time)
                 else:
                     # plt.show(block=False)
-                    plt.pause(wait_time + 0.01)
+                    plt.pause(wait_time + 0.5)
                 # plt.close(g_fig)
             elif wait_time < 0:
                 plt.draw()
@@ -495,7 +529,7 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, plot_pi
             optimizer.step()
             print(model.expands)
             if plot_picture:
-                draw(model, wait_time=wait_time, enlarge=500)
+                draw(model, wait_time=wait_time, enlarge=1)
     except KeyboardInterrupt:
         pass
     g_exit = True

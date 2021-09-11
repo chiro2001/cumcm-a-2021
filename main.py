@@ -125,9 +125,15 @@ class FAST(nn.Module):
         self.to(self.device)
 
     # 计算在当前伸缩值状态下，主索节点的位置
-    def update_position(self, expand_source: torch.Tensor = None):
+    def update_position(self, expand_source=None):
         if expand_source is None:
+            self.limit_expands()
             expand_source = self.expands
+        else:
+            if isinstance(expand_source, np.ndarray):
+                expand_source.clip(-0.6, 0.6)
+            else:
+                expand_source = torch.clamp(expand_source, torch.tensor(-0.6), torch.tensor(0.6))
         # print(self.position_raw, self.unit_vectors, self.expands)
         # print(self.unit_vectors, self.expands)
         # print(self.unit_vectors.shape, self.expands.shape)
@@ -144,24 +150,36 @@ class FAST(nn.Module):
 
     # 判断当前伸缩条件下能否满足伸缩量限制
     def is_expands_legal(self) -> bool:
-        r = torch.max(self.expands) > 0.6 or torch.min(self.expands) < -0.6
+        r = torch.max(self.expands) <= 0.6 and torch.min(self.expands) >= -0.6
         return r
+
+    # 数一数有多少个伸缩量不满足要求
+    def count_illegal_expands(self) -> int:
+        # ones = torch.ones(self.expands.shape, device=self.device, dtype=torch.float64)
+        # zeros = torch.zeros(self.expands.shape, device=self.device, dtype=torch.float64)
+        count_1 = torch.where(-0.6 > self.expands, 1., 0.)
+        count_2 = torch.where(0.6 < self.expands, 1., 0.)
+        count = count_1 + count_2
+        return torch.sum(count)
 
     # 判断当前伸缩条件能否满足间隔限制
     def is_padding_legal(self, paddings=None) -> bool:
         paddings = self.get_paddings(source=self.position) if paddings is None else paddings
-        return torch.sum(torch.tensor([
-            torch.sum(torch.tensor([
-                (1 if (torch.abs(paddings[i][j] - self.paddings_raw[i][j]) < 0.0007 * self.paddings_raw[i][j]) else 0)
-                for j in range(3)
-            ])) for i in range(len(paddings))
-        ])) == 0
+        d = torch.abs(paddings - self.paddings_raw)
+        count = torch.where(d > 0.0007 * self.paddings_raw, 1., 0.)
+        return count.sum() == 0
+        # return torch.sum(torch.tensor([
+        #     torch.sum(torch.tensor([
+        #         (1 if (torch.abs(paddings[i][j] - self.paddings_raw[i][j]) < 0.0007 * self.paddings_raw[i][j]) else 0)
+        #         for j in range(3)
+        #     ])) for i in range(len(paddings))
+        # ])) == 0
 
     # 得到间隔误差
-    def get_padding_loss(self, weight: float = 1) -> float:
+    def get_padding_loss(self, weight: float = 1) -> torch.Tensor:
         paddings = self.get_paddings(source=self.position)
         if self.is_padding_legal(paddings=paddings):
-            return 0
+            return torch.tensor(0)
         # length = len(paddings)
         # r = torch.sum(torch.from_numpy(
         #     np.array([
@@ -173,11 +191,32 @@ class FAST(nn.Module):
         r = torch.sum(((paddings - self.paddings_raw) ** 2).flatten())
         return r * weight
 
+    # 处理限制伸缩量
+    def limit_expands(self):
+        # self.expands = nn.Parameter(torch.clamp(self.expands, torch.tensor(-0.6), torch.tensor(0.6)))
+        self.expands.data.clamp_(torch.tensor(-0.6), torch.tensor(0.6))
+
+    # 处理限制间隔误差
+    def limit_paddings(self):
+        orders = [
+            [1, 2],
+            [0, 2],
+            [0, 1]
+        ]
+        for i in range(len(self.count_triangles) - 1, 0, -1):
+            board = self.boards[i]
+            distance: torch.Tensor = board.transpose(0, 1)[0] ** 2 + board.transpose(0, 1)[1] ** 2
+            # 选定最近的那个点
+            select = torch.argmin(distance)
+            near = board[select]
+
     # 得到伸缩误差
     def get_expand_loss(self, weight: float = 1) -> torch.Tensor:
         r = torch.sum(torch.stack(
             [torch.tensor(0).to(self.device) if (-0.6 <= expand <= 0.6) else (torch.abs(expand) - 0.6) for expand in
              self.expands]))
+        self.limit_expands()
+        # return torch.tensor(0) * weight
         return r * weight
 
     # 得到光通量误差
@@ -191,6 +230,7 @@ class FAST(nn.Module):
         self.boards = self.get_boards()
         # 得到底部顶点
         vertex = self.get_vertex()
+        index = 0
         for board in self.boards:
             # 反射板中心
             center = get_board_center(board)
@@ -198,6 +238,7 @@ class FAST(nn.Module):
             # a = board.transpose(0, 1)
             # b = board.transpose(0, 1)[0]
             # c = board.transpose(0, 1)[0].max()
+
             if board.transpose(0, 1)[0].max() ** 2 + board.transpose(0, 1)[1].max() ** 2 <= FAST.R_SURFACE ** 2:
                 count_surface += 1
                 n_plane, D = triangle_to_plane(board)
@@ -248,10 +289,13 @@ class FAST(nn.Module):
                 ])
                 # 标准化向量
                 n_surface, n_board = torch.abs(normalizing(n_surface)), torch.abs(normalizing(n_board))
+                # n_surface, n_board = -normalizing(n_surface), normalizing(n_board)
                 # 求点积
                 dot = torch.dot(n_surface, n_board)
                 loss_sum += dot
             else:
+                # loss_sum += 1
+                # count_surface += 1
                 continue
 
         r = (1 - (loss_sum / count_surface)) * weight
@@ -294,6 +338,7 @@ class FAST(nn.Module):
         for triangle in self.triangles_data:
             if torch.eq(torch.as_tensor(self.get_board(triangle)), board).sum().item() == 3:
                 logger.info(f'using board: {triangle}')
+                break
         n, D = triangle_to_plane(board)
         return -D / n[2]
 
@@ -330,20 +375,21 @@ g_exit: bool = False
 
 # 绘制当前图像
 def draw(model: FAST, **kwargs):
-    # global g_frame, g_draw_kwargs
-    # g_frame = model.expands.clone().cpu().detach().numpy()
-    # g_draw_kwargs = kwargs
-    frame = model.expands.clone().cpu().detach().numpy()
-    position = model.update_position(expand_source=frame)
-    size = (int(position.transpose(0, 1)[0].max() - position.transpose(0, 1)[0].min() + 1),
-            int(position.transpose(0, 1)[1].max() - position.transpose(0, 1)[1].min() + 1))
-    im = np.zeros(size, dtype=np.uint8)
-    for p in position:
-        pos = (int((p[0] - position.transpose(0, 1)[0].min())), int((p[1] - position.transpose(0, 1)[1].min())))
-        cv2.circle(im, center=pos, radius=5, color=(0xFF - int(0xFF * (p[2] - position.transpose(0, 1)[2].min()) / (
-                    position.transpose(0, 1)[2].max() - position.transpose(0, 1)[2].min()))), thickness=-1)
-    cv2.imshow('now', im)
-    cv2.waitKey(1)
+    global g_frame, g_draw_kwargs
+    g_frame = model.expands.clone().cpu().detach().numpy()
+    g_draw_kwargs = kwargs
+
+    # frame = model.expands.clone().cpu().detach().numpy()
+    # position = model.update_position(expand_source=frame)
+    # size = (int(position.transpose(0, 1)[0].max() - position.transpose(0, 1)[0].min() + 1),
+    #         int(position.transpose(0, 1)[1].max() - position.transpose(0, 1)[1].min() + 1))
+    # im = np.zeros(size, dtype=np.uint8)
+    # for p in position:
+    #     pos = (int((p[0] - position.transpose(0, 1)[0].min())), int((p[1] - position.transpose(0, 1)[1].min())))
+    #     cv2.circle(im, center=pos, radius=5, color=(0xFF - int(0xFF * (p[2] - position.transpose(0, 1)[2].min()) / (
+    #             position.transpose(0, 1)[2].max() - position.transpose(0, 1)[2].min()))), thickness=-1)
+    #     cv2.imshow('now', im)
+    #     cv2.waitKey(1)
 
 
 def draw_thread(source: torch.Tensor = None):
@@ -366,11 +412,18 @@ def draw_thread(source: torch.Tensor = None):
                     except Exception as e:
                         print(e)
 
-        # ax = plt.axes(projection='3d')
-        # ax.view_init(elev=10., azim=11)
         plt.xlim(-300, 300)
         plt.ylim(-300, 300)
-        # ax.set_zlim(-400, -100)
+
+        ax = plt.axes(projection='3d')
+        ax.view_init(elev=10., azim=11)
+        # ax.view_init(elev=90., azim=0)
+        ax.set_zlim(-400, -100)
+
+        # ax2 = plt.axes(projection='3d')
+        # ax2.view_init(elev=10., azim=11)
+        # # ax2.view_init(elev=90., azim=0)
+        # ax2.set_zlim(-400, -100)
 
         if source is None:
             expands = g_frame * enlarge
@@ -379,17 +432,18 @@ def draw_thread(source: torch.Tensor = None):
             expands = source * enlarge
         position: torch.Tensor = model_.update_position(expand_source=expands)
         points = position.clone().cpu().numpy()
-        # ax.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
-        X, Y = np.meshgrid(points.T[0], points.T[1])
-        Z = (1 - X / 2 + X ** 3 + Y ** 4) * np.exp(-X ** 2 - Y ** 2)
-        plt.contourf(X, Y, Z)
+        ax.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
+        # ax2.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
+        # X, Y = np.meshgrid(points.T[0], points.T[1])
+        # Z = (1 - X / 2 + X ** 3 + Y ** 4) * np.exp(-X ** 2 - Y ** 2)
+        # plt.contourf(X, Y, Z)
 
         if source is None:
             # if wait_time == 0:
             #     plt.show()
             if 0 <= wait_time:
                 if g_fig is None:
-                    g_fig = plt.figure(1, figsize=(4, 4))
+                    g_fig = plt.figure(1, figsize=(4, 4), dpi=80)
                 plt.draw()
                 if wait_time > 0:
                     plt.pause(wait_time)
@@ -408,10 +462,15 @@ def draw_thread(source: torch.Tensor = None):
 
 
 def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, plot_picture: bool = True, wait_time: int = 0,
-         out: str = 'data/附件4.xlsx', **kwargs):
+         out: str = 'data/附件4.xlsx', module_path: str = None, load_path: str = None, **kwargs):
     global model_, g_exit
     model_ = FAST(**kwargs)
     model = model_
+    if load_path is not None:
+        try:
+            model.load_state_dict(torch.load(load_path))
+        except FileNotFoundError:
+            logger.error(f"No module path: {load_path}")
     thread_draw = threading.Thread(target=draw_thread)
     thread_draw.setDaemon(True)
     thread_draw.start()
@@ -419,6 +478,8 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, plot_pi
     # 旋转模型
     # test_rotation(model)
     model.rotate(alpha, beta, unit_degree=True)
+    # test_triangle_order(model)
+    # exit()
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     try:
@@ -427,7 +488,7 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, plot_pi
             loss = model()
             logger.info(f'epoch {i} loss: {loss.item()}')
             if not model.is_expands_legal():
-                logger.warning(f'不满足伸缩限制！')
+                logger.warning(f'不满足伸缩限制！共{model.count_illegal_expands()}')
             if not model.is_padding_legal():
                 logger.warning(f'不满足间隔变化限制！')
             loss.backward()
@@ -453,6 +514,10 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, plot_pi
     worksheet.set_column("B:B", 15)
     worksheet.set_column("D:D", 50)
     writer.close()
+    # 进行一个模型的保存
+    if module_path is not None:
+        logger.info(f'Saving module weights to: {module_path}')
+        torch.save(model.state_dict(), module_path)
     logger.info('ALL DONE')
 
 
@@ -465,12 +530,24 @@ def test_rotation(model: FAST):
     exit()
 
 
+def test_triangle_order(model: FAST):
+    im = np.zeros((500, 500), dtype=np.uint8)
+    for i in range(model.count_triangles):
+        triangle = model.triangles_data[i]
+        board = model.get_board(triangle).cpu().clone().detach().numpy()
+        points = np.array((board.T[:2]).T, dtype=np.int32) + 250
+        cv2.fillPoly(im, [points], int(200 - i / model.count_triangles * 200) + 50)
+        cv2.imshow('triangles', im)
+        cv2.waitKey(1)
+    cv2.waitKey(0)
+
+
 model_: FAST = None
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-a', '--alpha', type=float, default=0, help='设置 alpha 角（单位：度）')
-    parser.add_argument('-b', '--beta', type=float, default=0, help='设置 beta 角（单位：度）')
+    parser.add_argument('-b', '--beta', type=float, default=90, help='设置 beta 角（单位：度）')
     parser.add_argument('-l', '--learning-rate', type=float, default=1e-2, help='设置学习率')
     parser.add_argument('-r', '--randomly-init', type=bool, default=False, help='设置是否随机初始化参数')
     parser.add_argument('-p', '--optim', type=str, default='Adam', help='设置梯度下降函数')
@@ -478,6 +555,9 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--show', type=bool, default=True, help='设置是否显示训练中图像')
     parser.add_argument('-w', '--wait-time', type=float, default=0, help='设置图像显示等待时间（单位：秒）')
     parser.add_argument('-o', '--out', type=str, default='data/附件4.xlsx', help='设置完成后数据导出文件')
+    parser.add_argument('-m', '--module-path', type=str, default='data/module.pth', help='设置模型保存路径')
+    # parser.add_argument('-t', '--load-path', type=str, default='data/module.pth', help='设置模型加载路径')
+    parser.add_argument('-t', '--load-path', type=str, default=None, help='设置模型加载路径')
     args = parser.parse_args()
     logger.info(f'参数: {args}')
     main(**args.__dict__)

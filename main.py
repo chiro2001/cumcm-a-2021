@@ -1,9 +1,11 @@
-import sys
+import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 from torch import nn
 import torch.optim as optim
+from tqdm import trange
 from utils import *
+from base_logger import logger
 
 
 class FAST(nn.Module):
@@ -12,10 +14,15 @@ class FAST(nn.Module):
     F = 0.466
     R_SURFACE = 150
 
-    def __init__(self, device: torch.device):
+    def __init__(self, **kwargs):
         super(FAST, self).__init__()
 
+        device = torch.device(kwargs.get('device', None) if kwargs.get('device', None) is not None else (
+            "cuda" if torch.cuda.is_available() else "cpu"))
+        self.init_randomly = kwargs.get('randomly_init', False)
         self.device: torch.device = device
+        self.kwargs = kwargs
+
         self.count_nodes: int = None
         self.count_triangles: int = None
         self.expands: nn.Parameter = None
@@ -109,8 +116,10 @@ class FAST(nn.Module):
             [get_unit_vector(self.position_raw[i], self.actuator_base[i]).cpu().numpy() for i in
              range(self.count_nodes)])).to(self.device)
         # 每个节点的伸展长度
-        # self.expands = nn.Parameter(torch.zeros(self.count_nodes, dtype=torch.float64))
-        self.expands = nn.Parameter(torch.rand(self.count_nodes, dtype=torch.float64) * 1.2 - 0.6)
+        if self.init_randomly:
+            self.expands = nn.Parameter(torch.rand(self.count_nodes, dtype=torch.float64) * 1.2 - 0.6)
+        else:
+            self.expands = nn.Parameter(torch.zeros(self.count_nodes, dtype=torch.float64))
         # 准备好 boards 数据
         self.boards = self.get_boards().to(self.device)
 
@@ -242,10 +251,12 @@ class FAST(nn.Module):
 
     # 计算整体误差
     def get_loss(self) -> float:
-        return self.get_expand_loss(weight=self.loss_weights[0]) + \
-               self.get_padding_loss(weight=self.loss_weights[0]) + \
-               self.get_fitting_loss(weight=self.loss_weights[1]) + \
-               self.get_light_loss(weight=self.loss_weights[2])
+        loss_1 = self.get_expand_loss(weight=self.loss_weights[0])
+        loss_2 = self.get_padding_loss(weight=self.loss_weights[0])
+        loss_3 = self.get_fitting_loss(weight=self.loss_weights[1])
+        loss_4 = self.get_light_loss(weight=self.loss_weights[2])
+        loss = sum([loss_1, loss_2, loss_3, loss_4])
+        return loss
 
     def get_board(self, triangle) -> torch.Tensor:
         # return torch.from_numpy(np.array([self.position[self.index[triangle[i]]].detach().numpy() for i in range(3)]))
@@ -319,24 +330,52 @@ def draw(model: FAST, wait_time: int = 0):
     plt.clf()
 
 
-def main(alpha: float, beta: float, learning_rate: float = 1e-4, plot_picture: bool = True, device: str = None,
-         wait_time: int = 0):
-    device = torch.device(device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu"))
-    model = FAST(device=device)
+def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, plot_picture: bool = True, wait_time: int = 0,
+         out: str = 'data/附件4.xlsx', **kwargs):
+    model = FAST(**kwargs)
     # TODO: 旋转模型
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    for i in range(1000):
-        optimizer.zero_grad()
-        loss = model()
-        print(f'loss: {loss.item()}')
-        loss.backward()
-        optimizer.step()
-        print(model.expands)
-        if plot_picture:
-            draw(model, wait_time=wait_time)
+    try:
+        for i in trange(1000):
+            optimizer.zero_grad()
+            loss = model()
+            logger.info(f'epoch {i} loss: {loss.item()}')
+            loss.backward()
+            optimizer.step()
+            print(model.expands)
+            if plot_picture:
+                draw(model, wait_time=wait_time)
+    except KeyboardInterrupt:
+        pass
+    # 进行一个文件的保存
+    logger.info(f'Saving expands data to: {out}')
+    writer = pd.ExcelWriter(out, engine='xlsxwriter')
+    df = pd.DataFrame({
+        '对应主索节点编号': model.name_list,
+        '伸缩量（米）': model.expands.cpu().detach().numpy(),
+        '': ['' for _ in range(model.count_nodes)],
+        '注：至少保留3位小数': ['' for _ in range(model.count_nodes)]
+    })
+    df.to_excel(writer, sheet_name='Sheet1', index=False)
+    worksheet = writer.sheets['Sheet1']
+    worksheet.set_column("A:A", 4)
+    worksheet.set_column("B:B", 15)
+    worksheet.set_column("D:D", 50)
+    writer.close()
+    logger.info('ALL DONE')
 
 
 if __name__ == '__main__':
-    device_ = sys.argv[1] if len(sys.argv) >= 2 else None
-    learning_rate_ = float(sys.argv[2]) if len(sys.argv) >= 3 else 1e-2
-    main(0, 0, learning_rate=learning_rate_, plot_picture=True, device=device_, wait_time=0)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-a', '--alpha', type=float, default=0, help='设置 alpha 角（单位：度）')
+    parser.add_argument('-b', '--beta', type=float, default=0, help='设置 beta 角（单位：度）')
+    parser.add_argument('-l', '--learning-rate', type=float, default=1e-2, help='设置学习率')
+    parser.add_argument('-r', '--randomly-init', type=float, default=1e-2, help='设置是否随机初始化参数')
+    parser.add_argument('-p', '--optim', type=str, default='Adam', help='设置梯度下降函数')
+    parser.add_argument('-d', '--device', type=str, default=None, help='设置 Tensor 计算设备')
+    parser.add_argument('-s', '--show', type=bool, default=True, help='设置是否显示训练中图像')
+    parser.add_argument('-w', '--wait-time', type=float, default=0, help='设置图像显示等待时间（单位：秒）')
+    parser.add_argument('-o', '--out', type=str, default='data/附件4.xlsx', help='设置完成后数据导出文件')
+    args = parser.parse_args()
+    logger.info(f'参数: {args}')
+    main(**args.__dict__)

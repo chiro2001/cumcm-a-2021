@@ -1,16 +1,18 @@
 import argparse
 import pandas as pd
+import time
 import matplotlib.pyplot as plt
 from torch import nn
 import torch.optim as optim
 from tqdm import trange
+import threading
 from utils import *
 from base_logger import logger
 
 
 class FAST(nn.Module):
     # 一些常量设定
-    R = 300
+    R = 300 + 0.4
     F = 0.466
     R_SURFACE = 150
 
@@ -33,18 +35,13 @@ class FAST(nn.Module):
         self.triangles_data: list = None
         self.name_list: list = []
         self.index: dict = {}
-        self.paddings_raw: list = None
+        self.paddings_raw: torch.Tensor = None
         self.unit_vectors: torch.Tensor = None
         self.boards: torch.Tensor = None
 
-        self.loss_weights = torch.tensor([1, 1, 1]).to(self.device)
+        self.loss_weights: torch.Tensor = torch.tensor([1e-3, 1, 1]).to(self.device)
 
         self.read_data()
-
-        self.paddings_raw = self.get_paddings(source=self.position_raw)
-
-        self.to(self.device)
-        # print(self.expands, self.unit_vectors)
 
     def get_edge(self, node1: str, node2: str, source) -> float:
         return get_distance(source[self.index[node1]], source[self.index[node2]])
@@ -122,20 +119,27 @@ class FAST(nn.Module):
             self.expands = nn.Parameter(torch.zeros(self.count_nodes, dtype=torch.float64))
         # 准备好 boards 数据
         self.boards = self.get_boards().to(self.device)
+        self.paddings_raw = self.get_paddings(source=self.position_raw)
+        # 到设备
+        self.to(self.device)
 
     # 计算在当前伸缩值状态下，主索节点的位置
-    def update_position(self):
+    def update_position(self, expand_source: torch.Tensor = None):
+        if expand_source is None:
+            expand_source = self.expands
         # print(self.position_raw, self.unit_vectors, self.expands)
         # print(self.unit_vectors, self.expands)
         # print(self.unit_vectors.shape, self.expands.shape)
         # self.position = self.position_raw + torch.dot(self.unit_vectors,
         #                                               torch.reshape(self.expands, (len(self.expands), 1)))
-        m = self.unit_vectors * self.expands.reshape((self.count_nodes, 1))
+        # print("Why!")
+        m = self.unit_vectors * expand_source.reshape((self.count_nodes, 1))
         # m = torch.matmul(self.unit_vectors, self.expands)
-        self.position = self.position_raw + m
+        position = self.position_raw + m
         # print(self.position.shape)
         # for i in range(self.count_nodes):
         #     self.position[i] = self.position_raw[i] + self.unit_vectors[i] * self.expands[i]
+        return position
 
     # 判断当前伸缩条件下能否满足伸缩量限制
     def is_expands_legal(self) -> bool:
@@ -169,18 +173,18 @@ class FAST(nn.Module):
         return r * weight
 
     # 得到伸缩误差
-    def get_expand_loss(self, weight: float = 1) -> float:
+    def get_expand_loss(self, weight: float = 1) -> torch.Tensor:
         r = torch.sum(torch.stack(
             [torch.tensor(0).to(self.device) if (-0.6 <= expand <= 0.6) else (torch.abs(expand) - 0.6) for expand in
              self.expands]))
         return r * weight
 
     # 得到光通量误差
-    def get_light_loss(self, weight: float = 1) -> float:
-        return 0 * weight
+    def get_light_loss(self, weight: float = 1) -> torch.Tensor:
+        return torch.tensor(0) * weight
 
     # 得到拟合精度误差
-    def get_fitting_loss(self, weight: float = 1) -> float:
+    def get_fitting_loss(self, weight: float = 1) -> torch.Tensor:
         loss_sum = 0
         count_surface = 0
         self.boards = self.get_boards()
@@ -250,12 +254,14 @@ class FAST(nn.Module):
         return r
 
     # 计算整体误差
-    def get_loss(self) -> float:
+    def get_loss(self) -> torch.Tensor:
         loss_1 = self.get_expand_loss(weight=self.loss_weights[0])
         loss_2 = self.get_padding_loss(weight=self.loss_weights[0])
         loss_3 = self.get_fitting_loss(weight=self.loss_weights[1])
         loss_4 = self.get_light_loss(weight=self.loss_weights[2])
-        loss = sum([loss_1, loss_2, loss_3, loss_4])
+        loss_all = [loss_1, loss_2, loss_3, loss_4]
+        logger.info(f"loss: {[x.item() for x in loss_all]}")
+        loss = sum(loss_all)
         return loss
 
     def get_board(self, triangle) -> torch.Tensor:
@@ -281,59 +287,121 @@ class FAST(nn.Module):
         board = self.get_bottom_board()
         if board is None:
             raise Exception("取得顶点参考板错误！")
+        for triangle in self.triangles_data:
+            if torch.eq(torch.as_tensor(self.get_board(triangle)), board).sum().item() == 3:
+                logger.info(f'using board: {triangle}')
         n, D = triangle_to_plane(board)
         return -D / n[2]
 
+    # 整体旋转整个模型
+    def rotate(self, alpha: float, beta: float, unit_degree: bool = False):
+        if unit_degree:
+            alpha = alpha / 360 * np.pi * 2
+            beta = beta / 360 * np.pi * 2
+        m = get_rotation_matrix(alpha, beta).to(self.device)
+        # self.position = torch.mm(self.position, m)
+        # self.position_raw = torch.mm(self.position_raw, m)
+        # self.actuator_head = torch.mm(self.actuator_head, m)
+        # self.actuator_base = torch.mm(self.actuator_base, m)
+        # self.unit_vectors = torch.mm(self.unit_vectors, m)
+        # print(m.shape, self.position.shape)
+        self.position = torch.mm(m, self.position.transpose(0, 1)).transpose(0, 1)
+        self.position_raw = torch.mm(m, self.position_raw.transpose(0, 1)).transpose(0, 1)
+        self.actuator_head = torch.mm(m, self.actuator_head.transpose(0, 1)).transpose(0, 1)
+        self.actuator_base = torch.mm(m, self.actuator_base.transpose(0, 1)).transpose(0, 1)
+        self.unit_vectors = torch.mm(m, self.unit_vectors.transpose(0, 1)).transpose(0, 1)
+
     # 计算主索节点位置
     def forward(self):
-        self.update_position()
+        self.position = self.update_position()
         loss = self.get_loss()
         return loss
 
 
 g_fig = None
+g_frame: np.ndarray = None
+g_draw_kwargs: dict = None
+g_exit: bool = False
 
 
 # 绘制当前图像
-def draw(model: FAST, wait_time: int = 0):
-    global g_fig
-    if wait_time < 0:
-        if g_fig is not None:
-            try:
-                plt.close(g_fig)
-            except Exception as e:
-                print(e)
+def draw(model: FAST, **kwargs):
+    global g_frame, g_draw_kwargs
+    g_frame = model.expands.clone().cpu().detach().numpy()
+    g_draw_kwargs = kwargs
 
-    ax = plt.axes(projection='3d')
-    ax.view_init(elev=10., azim=11)
-    plt.xlim(-300, 300)
-    plt.ylim(-300, 300)
-    ax.set_zlim(-400, -100)
 
-    points = model.position.detach().numpy()
-    ax.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
+def draw_thread(source: torch.Tensor = None):
+    global g_frame, g_fig
+    while True:
+        wait_time: int = 0
+        enlarge: float = 500
+        if source is None:
+            if g_exit:
+                return
+            if g_frame is None or model_ is None:
+                time.sleep(0.05)
+                continue
+            wait_time: int = g_draw_kwargs.get('wait_time', 0)
+            enlarge: float = g_draw_kwargs.get('enlarge', 500)
+            if wait_time < 0:
+                if g_fig is not None:
+                    try:
+                        plt.close(g_fig)
+                    except Exception as e:
+                        print(e)
 
-    # if wait_time == 0:
-    #     plt.show()
-    if 0 <= wait_time:
-        if g_fig is None:
-            g_fig = plt.figure(1)
-        plt.draw()
-        if wait_time > 0:
-            plt.pause(wait_time)
+        ax = plt.axes(projection='3d')
+        ax.view_init(elev=10., azim=11)
+        plt.xlim(-300, 300)
+        plt.ylim(-300, 300)
+        ax.set_zlim(-400, -100)
+
+        if source is None:
+            expands = g_frame * enlarge
+            g_frame = None
         else:
-            # plt.show(block=False)
-            plt.pause(wait_time + 0.01)
-        # plt.close(g_fig)
-    elif wait_time < 0:
-        plt.draw()
-    plt.clf()
+            expands = source * enlarge
+        position: torch.Tensor = model_.update_position(expand_source=expands)
+        points = position.clone().cpu().numpy()
+        ax.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
+
+        if source is None:
+            # if wait_time == 0:
+            #     plt.show()
+            if 0 <= wait_time:
+                if g_fig is None:
+                    g_fig = plt.figure(1, figsize=(4, 4))
+                plt.draw()
+                if wait_time > 0:
+                    plt.pause(wait_time)
+                else:
+                    # plt.show(block=False)
+                    plt.pause(wait_time + 0.01)
+                # plt.close(g_fig)
+            elif wait_time < 0:
+                plt.draw()
+            plt.clf()
+        else:
+            fig = plt.figure(1)
+            plt.draw()
+            plt.pause(0.01)
+            break
 
 
 def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, plot_picture: bool = True, wait_time: int = 0,
          out: str = 'data/附件4.xlsx', **kwargs):
-    model = FAST(**kwargs)
-    # TODO: 旋转模型
+    global model_, g_exit
+    model_ = FAST(**kwargs)
+    model = model_
+    thread_draw = threading.Thread(target=draw_thread)
+    thread_draw.setDaemon(True)
+    thread_draw.start()
+
+    # 旋转模型
+    # test_rotation(model)
+    model.rotate(alpha, beta, unit_degree=True)
+
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     try:
         for i in trange(1000):
@@ -344,9 +412,10 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, plot_pi
             optimizer.step()
             print(model.expands)
             if plot_picture:
-                draw(model, wait_time=wait_time)
+                draw(model, wait_time=wait_time, enlarge=500)
     except KeyboardInterrupt:
         pass
+    g_exit = True
     # 进行一个文件的保存
     logger.info(f'Saving expands data to: {out}')
     writer = pd.ExcelWriter(out, engine='xlsxwriter')
@@ -365,12 +434,23 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, plot_pi
     logger.info('ALL DONE')
 
 
+def test_rotation(model: FAST):
+    for beta in range(45, 90, 5):
+        model.rotate(0, beta, unit_degree=True)
+        draw_thread(model.expands.clone().cpu().detach().numpy())
+        # time.sleep(1)
+        model.read_data()
+    exit()
+
+
+model_: FAST = None
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-a', '--alpha', type=float, default=0, help='设置 alpha 角（单位：度）')
     parser.add_argument('-b', '--beta', type=float, default=0, help='设置 beta 角（单位：度）')
     parser.add_argument('-l', '--learning-rate', type=float, default=1e-2, help='设置学习率')
-    parser.add_argument('-r', '--randomly-init', type=float, default=1e-2, help='设置是否随机初始化参数')
+    parser.add_argument('-r', '--randomly-init', type=bool, default=False, help='设置是否随机初始化参数')
     parser.add_argument('-p', '--optim', type=str, default='Adam', help='设置梯度下降函数')
     parser.add_argument('-d', '--device', type=str, default=None, help='设置 Tensor 计算设备')
     parser.add_argument('-s', '--show', type=bool, default=True, help='设置是否显示训练中图像')

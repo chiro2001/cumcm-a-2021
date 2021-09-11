@@ -68,21 +68,35 @@ def triangle_to_plane(points: torch.Tensor):
 #     ])
 
 
-# 得到三维旋转矩阵，单位弧度
-# https://blog.csdn.net/fireflychh/article/details/82352710
-def get_rotation_matrix(yaw: float, pitch: float, roll: float):
-    from torch import cos, sin
-    return torch.tensor([
-        [cos(yaw) * cos(pitch),
-         cos(yaw) * sin(pitch) * sin(roll) - sin(yaw) * cos(roll),
-         cos(yaw) * sin(pitch) * cos(roll) + sin(yaw) * sin(roll)],
-        [sin(yaw) * cos(pitch),
-         sin(yaw) * sin(pitch) * sin(roll) + cos(yaw) * cos(roll),
-         sin(yaw) * sin(pitch) * cos(roll) - cos(yaw) * sin(roll)],
-        [-sin(pitch),
-         cos(pitch) * sin(roll),
-         cos(pitch) * cos(roll)]
-    ])
+# # 得到三维旋转矩阵，单位弧度
+# # https://blog.csdn.net/fireflychh/article/details/82352710
+# def get_rotation_matrix(yaw: float, pitch: float, roll: float):
+#     yaw, pitch, roll = torch.tensor(yaw), torch.tensor(pitch), torch.tensor(roll)
+#     from torch import cos, sin
+#     return torch.tensor([
+#         [cos(yaw) * cos(pitch),
+#          cos(yaw) * sin(pitch) * sin(roll) - sin(yaw) * cos(roll),
+#          cos(yaw) * sin(pitch) * cos(roll) + sin(yaw) * sin(roll)],
+#         [sin(yaw) * cos(pitch),
+#          sin(yaw) * sin(pitch) * sin(roll) + cos(yaw) * cos(roll),
+#          sin(yaw) * sin(pitch) * cos(roll) - cos(yaw) * sin(roll)],
+#         [-sin(pitch),
+#          cos(pitch) * sin(roll),
+#          cos(pitch) * cos(roll)]
+#     ], dtype=torch.float64)
+
+def get_rotation_matrix(alpha: float, beta: float):
+    from numpy import cos, sin
+    theta = np.pi / 2 - beta
+    return torch.as_tensor(torch.mm(torch.as_tensor([
+        [cos(theta), 0, -sin(theta)],
+        [0, 1, 0],
+        [sin(theta), 0, cos(theta)]
+    ]), torch.as_tensor([
+        [cos(alpha), sin(alpha), 0],
+        [-sin(alpha), cos(alpha), 0],
+        [0, 0, 1]
+    ])), dtype=torch.float64)
 
 
 # def within(val, range_):

@@ -38,11 +38,13 @@ class FAST(nn.Module):
         self.actuator_head: torch.Tensor = None
         self.actuator_base: torch.Tensor = None
         self.triangles_data: list = None
-        self.name_list: list = []
+        self.name_list: list = None
         self.index: dict = {}
         self.paddings_raw: torch.Tensor = None
         self.unit_vectors: torch.Tensor = None
         self.boards: torch.Tensor = None
+
+        self.nodes_data: dict = None
 
         # self.loss_weights: torch.Tensor = torch.tensor([1e-1, 2e4, 1e-3]).to(self.device)
         # self.loss_weights: torch.Tensor = torch.tensor([5, 2e3, 1e-4]).to(self.device)
@@ -56,6 +58,8 @@ class FAST(nn.Module):
         self.vertex: nn.Parameter = nn.Parameter(torch.tensor(-FAST.R)).to(self.device)
 
         self.read_data()
+
+        self.init_data()
 
         self.ring_selection = []
         step = 5
@@ -86,54 +90,20 @@ class FAST(nn.Module):
             paddings.append(edges)
         return torch.stack(paddings)
 
-    def read_data(self):
-        # 主索节点的坐标和编号
-        data1 = pd.read_csv("data/附件1.csv", encoding='ANSI')
-        # print('主索节点的坐标和编号:\n', data1)
-        nodes_data = {}
-        for d in data1.itertuples():
-            nodes_data[d[1]] = {
-                # 'position': tuple(d[2:]),
-                'position_raw': d[2:],
-                'position': d[2:],
-                # 伸缩量，即所有需要求解的变量
-                'expand': 0
-            }
-
-        # 促动器下端点（地锚点）坐标、
-        # 基准态时上端点（顶端）的坐标，
-        # 以及促动器对应的主索节点编号
-        data2 = pd.read_csv("data/附件2.csv", encoding='ANSI')
-        # print('data2:\n', data2)
-        for d in data2.itertuples():
-            nodes_data[d[1]]['actuator_head'] = d[2:5]
-            nodes_data[d[1]]['actuator_base'] = d[5:8]
-
-        # print(nodes_data)
-
-        triangles_data = []
-        # 反射面板对应的主索节点编号
-        data3 = pd.read_csv("data/附件3.csv", encoding='ANSI')
-        # print('data3:\n', data3)
-        for d in data3.itertuples():
-            triangles_data.append(tuple(d[1:]))
-        # print(triangles_data)
-
+    def init_data(self):
         # 主索节点名称到下标号的映射
-        self.name_list = list(nodes_data.keys())
+        self.name_list = list(self.nodes_data.keys()) if self.name_list is None else self.name_list
         self.index = {self.name_list[i]: i for i in range(len(self.name_list))}
         self.position_raw = torch.from_numpy(
-            np.array([nodes_data[name]['position_raw'] for name in self.name_list])).to(self.device)
-        # print([nodes_data[name]['position'] for name in self.name_list])
-        self.position = torch.from_numpy(np.array([nodes_data[name]['position'] for name in self.name_list])).to(
+            np.array([self.nodes_data[name]['position_raw'] for name in self.name_list])).to(self.device)
+        # print([self.nodes_data[name]['position'] for name in self.name_list])
+        self.position = torch.from_numpy(np.array([self.nodes_data[name]['position'] for name in self.name_list])).to(
             self.device)
         self.actuator_head = torch.from_numpy(
-            np.array([nodes_data[name]['actuator_head'] for name in self.name_list])).to(self.device)
+            np.array([self.nodes_data[name]['actuator_head'] for name in self.name_list])).to(self.device)
         self.actuator_base = torch.from_numpy(
-            np.array([nodes_data[name]['actuator_base'] for name in self.name_list])).to(self.device)
-        self.triangles_data = triangles_data
-        self.count_triangles = len(triangles_data)
-        self.count_nodes = len(list(nodes_data.keys()))
+            np.array([self.nodes_data[name]['actuator_base'] for name in self.name_list])).to(self.device)
+
         # self.unit_vectors = torch.from_numpy(np.array(
         #     [get_unit_vector(self.position_raw[i], self.actuator_base[i]).cpu().numpy() for i in
         #      range(self.count_nodes)]).T).to(self.device)
@@ -150,6 +120,47 @@ class FAST(nn.Module):
         self.paddings_raw = self.get_paddings(source=self.position_raw)
         # 到设备
         self.to(self.device)
+
+    def sort_z(self):
+        logger.debug(f'name_list before: {self.name_list[:5]}...')
+        list.sort(self.name_list, key=lambda i: self.nodes_data[i]['position_raw'][2])
+        logger.debug(f'name_list after: {self.name_list[:5]}...')
+        self.init_data()
+
+    def read_data(self):
+        # 主索节点的坐标和编号
+        data1 = pd.read_csv("data/附件1.csv", encoding='ANSI')
+        # print('主索节点的坐标和编号:\n', data1)
+        self.nodes_data = {}
+        for d in data1.itertuples():
+            self.nodes_data[d[1]] = {
+                # 'position': tuple(d[2:]),
+                'position_raw': d[2:],
+                'position': d[2:]
+            }
+
+        # 促动器下端点（地锚点）坐标、
+        # 基准态时上端点（顶端）的坐标，
+        # 以及促动器对应的主索节点编号
+        data2 = pd.read_csv("data/附件2.csv", encoding='ANSI')
+        # print('data2:\n', data2)
+        for d in data2.itertuples():
+            self.nodes_data[d[1]]['actuator_head'] = d[2:5]
+            self.nodes_data[d[1]]['actuator_base'] = d[5:8]
+
+        # print(nodes_data)
+
+        triangles_data = []
+        # 反射面板对应的主索节点编号
+        data3 = pd.read_csv("data/附件3.csv", encoding='ANSI')
+        # print('data3:\n', data3)
+        for d in data3.itertuples():
+            triangles_data.append(tuple(d[1:]))
+        # print(triangles_data)
+
+        self.triangles_data = triangles_data
+        self.count_triangles = len(self.triangles_data)
+        self.count_nodes = len(list(self.nodes_data.keys()))
 
     def get_expand_filled(self, expand_source: torch.Tensor) -> torch.Tensor:
         expand_filled = torch.zeros(self.count_nodes, device=self.device, dtype=torch.float64)
@@ -215,8 +226,8 @@ class FAST(nn.Module):
         paddings = self.get_paddings(source=self.position)
         w = torch.tensor(1)
         if self.is_padding_legal(paddings=paddings):
-            # return torch.tensor(0)
-            w = w * 0.5
+            return torch.tensor(0)
+            # w = w * 0.5
 
         # length = len(paddings)
         # r = torch.sum(torch.from_numpy(
@@ -275,7 +286,7 @@ class FAST(nn.Module):
             else:
                 continue
 
-        return (count_surface * S - sum_surface) * weight
+        return (count_surface * S - sum_surface - 1000) * weight
 
     # 得到拟合精度误差
     def get_fitting_loss(self, weight: float = 1) -> torch.Tensor:
@@ -433,6 +444,16 @@ class FAST(nn.Module):
         self.actuator_head = torch.mm(m, self.actuator_head.transpose(0, 1)).transpose(0, 1)
         self.actuator_base = torch.mm(m, self.actuator_base.transpose(0, 1)).transpose(0, 1)
         self.unit_vectors = torch.mm(m, self.unit_vectors.transpose(0, 1)).transpose(0, 1)
+        for i in range(len(self.name_list)):
+            name = self.name_list[i]
+            self.nodes_data[name] = {
+                'position': self.position[i].cpu().clone().detach().numpy(),
+                'position_raw': self.position_raw[i].cpu().clone().detach().numpy(),
+                'actuator_head': self.actuator_head[i].cpu().clone().detach().numpy(),
+                'actuator_base': self.actuator_base[i].cpu().clone().detach().numpy()
+            }
+
+        self.sort_z()
 
     # 计算主索节点位置
     def forward(self):
@@ -521,12 +542,12 @@ def draw_thread(source: torch.Tensor = None):
             expands = source * enlarge
             expands_raw = source
 
-        # fig2 = plt.figure(dpi=80)
-        # ax2 = plt.axes()
-        # # ax2 = plt.subplot(2, 2, 1)
-        # plt.sca(ax2)
-        # # 画 expands
-        # plt.plot([i for i in range(len(expands_raw))], expands_raw)
+        fig2 = plt.figure(dpi=80)
+        ax2 = plt.axes()
+        # ax2 = plt.subplot(2, 2, 1)
+        plt.sca(ax2)
+        # 画 expands
+        plt.plot([i for i in range(len(expands_raw))], expands_raw)
 
         def draw_it(expands_, c='g'):
             position: torch.Tensor = model_.update_position(expand_source=expands_)
@@ -562,12 +583,12 @@ def draw_thread(source: torch.Tensor = None):
             plt.draw()
             plt.pause(3)
             plt.close(fig1)
-            # plt.close(fig2)
+            plt.close(fig2)
             break
 
 
 def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: bool = True, wait_time: int = 0,
-         out: str = 'data/附件4.xlsx', module_path: str = None, load_path: str = None, **kwargs):
+         out: str = 'data/附件4.xlsx', module_path: str = None, load_path: str = None, enlarge: float = 500, **kwargs):
     global model_, g_exit
     model_ = FAST(**kwargs)
     model = model_
@@ -588,6 +609,8 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: b
     # test_r2(model)
     # exit()
 
+    # 重新按照 z 排序
+
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     try:
         for i in trange(1000):
@@ -603,7 +626,8 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: b
             optimizer.step()
             print(model.expands)
             if show:
-                draw(model, wait_time=wait_time, enlarge=100)
+                # draw(model, wait_time=wait_time, enlarge=100)
+                draw(model, wait_time=wait_time, enlarge=enlarge)
     except KeyboardInterrupt:
         pass
     g_exit = True
@@ -708,6 +732,7 @@ if __name__ == '__main__':
     parser.add_argument('-w1', '--w1', type=float, default=weight_default[0], help='设置权值1')
     parser.add_argument('-w2', '--w2', type=float, default=weight_default[1], help='设置权值2')
     parser.add_argument('-w3', '--w3', type=float, default=weight_default[2], help='设置权值3')
+    parser.add_argument('-e', '--enlarge', type=float, default=500, help='设置图像伸缩放大倍数')
     args = parser.parse_args()
     logger.info(f'参数: {args}')
     main(**args.__dict__)

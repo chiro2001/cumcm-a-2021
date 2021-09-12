@@ -41,3 +41,16 @@ python main_r2.py ^
   --alpha 36.795 ^
   --beta 78.169
 
+@echo 计算第 3 问数据
+
+python main_r2.py ^
+  --learning-rate 0.0001 ^
+  --device cpu ^
+  --module-path data/temp.pth ^
+  --enlarge 500 ^
+  --load-path data/p2.pth ^
+  --wait-time 0.1 ^
+  --mode single ^
+  --alpha 36.795 ^
+  --beta 78.169 ^
+  --calc-only True

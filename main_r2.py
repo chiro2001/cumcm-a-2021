@@ -5,6 +5,7 @@ import time
 import matplotlib.pyplot as plt
 import traceback
 import torch.optim as optim
+from torch import nn
 from tqdm import trange
 import threading
 from utils import *
@@ -155,14 +156,20 @@ def draw_thread(source: torch.Tensor = None):
             break
 
 
+# 基于第 2 问的反射面调节方案，计算调节后馈源舱的接收比，即馈源舱有效区域接收到
+# 的反射信号与 300 米口径内反射面的反射信号之比，并与基准反射球面的接收比作比较。
 def calc(model: FAST):
-    # 计算内反射面的反射信号
-    s_inner_reflex = np.pi * FAST.R_SURFACE ** 2
-    loss_total = model()
-    raw_square = model.get_light_loss(get_raw_div=True)
-    # 求基准反射球面的反射面积
-    model.expands = model.expands * torch.tensor(0)
-    raw_ball_square = model.get_light_loss(get_raw_square=True)
+    with torch.no_grad():
+        # 计算内反射面的反射信号
+        s_inner_reflex = np.pi * FAST.R_SURFACE ** 2
+        loss_total = model()
+        raw_square = model.get_light_loss(get_raw_surface=True)
+        # 求基准反射球面的反射面积
+        # model.expands = model.expands * 0
+        model2 = FAST()
+        raw_ball_square = model2.get_light_loss(get_raw_square=True)
+        print(f"调节后馈源舱的接收比: {raw_square / s_inner_reflex}")
+        print(f"基准反射球面的接收比: {raw_ball_square / (np.pi * (FAST.D / 2) ** 2)}")
 
 
 def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: bool = True, wait_time: int = 0,

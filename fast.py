@@ -13,7 +13,10 @@ from base_logger import logger
 
 class FAST(nn.Module):
     # 一些常量设定
+    # 半径
     R = 300 + 0.4
+    # 口径大小（口径直径）
+    D = 250
     F = 0.466
     R_SURFACE = 150
     R_CABIN = 1.
@@ -317,7 +320,7 @@ class FAST(nn.Module):
 
     # 得到光通量误差
     def get_light_loss(self, weight: float = 1, get_raw_square: bool = False,
-                       get_raw_div: bool = False) -> torch.Tensor:
+                       get_raw_surface: bool = False) -> torch.Tensor:
         m = torch.as_tensor([0, 0, 1], device=self.device, dtype=torch.float64)
         S = np.pi * FAST.R_CABIN ** 2
         count_surface = 0
@@ -330,10 +333,12 @@ class FAST(nn.Module):
                 # 判断板子是否反射到馈源舱
                 n_panel, D = triangle_to_plane(board)
                 center = get_board_center(board)
-                theta = np.arccos(np.abs(np.cross(n_panel, [0, 0, 1]) / np.sqrt(np.sum(n_panel ** 2))))
-                n_l1 = center - [0, 0, -(1 - FAST.F) * FAST.R]
-                theta2 = np.arccos(
-                    np.abs(np.cross(n_panel, n_l1) / (np.sqrt(np.sum(n_l1 ** 2)) * np.sqrt(np.sum(n_panel ** 2)))))
+                theta = torch.arccos(
+                    torch.abs(torch.dot(n_panel, torch.as_tensor([0, 0, 1]) / torch.sqrt(torch.sum(n_panel ** 2)))))
+                # theta = np.arccos(np.abs(np.cross(n_panel, [0, 0, 1]) / np.sqrt(np.sum(n_panel ** 2))))
+                n_l1 = center - torch.as_tensor([0, 0, -(1 - FAST.F) * FAST.R])
+                theta2 = torch.arccos(torch.abs(torch.dot(n_panel, n_l1) / (
+                            torch.sqrt(torch.sum(n_l1 ** 2)) * torch.sqrt(torch.sum(n_panel ** 2)))))
                 if not theta - delta_theta <= theta2 <= theta + delta_theta:
                     continue
                 s1 = S * torch.cos(theta * 2)
@@ -352,8 +357,8 @@ class FAST(nn.Module):
                     sum_surface += s1
                 else:
                     continue
-            if get_raw_div:
-                return sum_surface / (count_surface * S)
+            if get_raw_surface:
+                return sum_surface
             else:
                 return (count_surface * S - sum_surface - 1000) * weight
 

@@ -189,7 +189,7 @@ class FAST(nn.Module):
         return expand_filled
 
     # 计算在当前伸缩值状态下，主索节点的位置
-    def update_position(self, expand_source=None):
+    def update_position(self, expand_source=None, enlarge: float = 1):
         if expand_source is None:
             self.limit_expands()
             expand_source = self.expands
@@ -206,7 +206,7 @@ class FAST(nn.Module):
         #                                               torch.reshape(self.expands, (len(self.expands), 1)))
         # print("Why!")
         expand_filled = self.get_expand_filled(expand_source=expand_source)
-        m = self.unit_vectors * expand_filled.reshape((self.count_nodes, 1))
+        m = self.unit_vectors * enlarge * expand_filled.reshape((self.count_nodes, 1))
         # m = torch.matmul(self.unit_vectors, self.expands)
         position = self.position_raw + m
         # print(self.position.shape)

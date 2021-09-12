@@ -69,6 +69,7 @@ def draw_thread(source: torch.Tensor = None):
         #     g_fig = plt.figure(1, figsize=(4, 4), dpi=80)
 
         # fig1 = plt.figure(1, figsize=(4, 4), dpi=80)
+        # plt.clf()
         fig1 = plt.figure(dpi=80)
 
         plt.xlim(-300, 300)
@@ -87,11 +88,11 @@ def draw_thread(source: torch.Tensor = None):
         # ax2.set_zlim(-400, -100)
 
         if source is None:
-            expands = g_frame * enlarge
+            # expands = g_frame * enlarge
             expands_raw = g_frame
             g_frame = None
         else:
-            expands = source * enlarge
+            # expands = source * enlarge
             expands_raw = source
 
         fig2 = plt.figure(dpi=80)
@@ -102,11 +103,12 @@ def draw_thread(source: torch.Tensor = None):
         plt.plot([i for i in range(len(expands_raw))], expands_raw)
 
         def draw_it(expands_, c='g'):
-            position: torch.Tensor = model_.update_position(expand_source=expands_)
+            position: torch.Tensor = model_.update_position(expand_source=expands_, enlarge=enlarge)
             points = position.clone().detach().cpu().numpy()
             ax.scatter3D(points.T[0], points.T[1], points.T[2], c=c, marker='.')
 
-        draw_it(expands, 'g')
+        # print('expands', expands_raw)
+        draw_it(expands_raw, 'g')
         # draw_it(expands_raw, 'm')
 
         # ax2.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
@@ -119,13 +121,12 @@ def draw_thread(source: torch.Tensor = None):
             #     plt.show()
             if 0 > wait_time:
                 plt.show()
+                time.sleep(t)
             if 0 == wait_time:
                 plt.draw()
-                if wait_time > 0:
-                    plt.pause(wait_time)
-                else:
-                    # plt.show(block=False)
-                    plt.pause(wait_time + 0.5)
+                t = wait_time + 0.5
+                plt.pause(t)
+                time.sleep(t)
                 # plt.close(g_fig)
             elif wait_time < 0:
                 plt.draw()
@@ -133,9 +134,10 @@ def draw_thread(source: torch.Tensor = None):
         else:
             # fig = plt.figure(1)
             plt.draw()
-            plt.pause(3)
+            plt.pause(wait_time if wait_time != 0 else 3)
             plt.close(fig1)
             plt.close(fig2)
+            plt.clf()
             break
 
 

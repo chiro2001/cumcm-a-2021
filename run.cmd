@@ -11,7 +11,7 @@ python main.py ^
 
 @echo 保存第 1 题结果到 vertex.txt
 
-del vertex.txt
+del data\vertex.txt
 
 python main.py ^
   --learning-rate 0.0001 ^

@@ -168,8 +168,13 @@ def calc(model: FAST):
         # model.expands = model.expands * 0
         model2 = FAST()
         raw_ball_square = model2.get_light_loss(get_raw_square=True)
-        print(f"调节后馈源舱的接收比: {raw_square / s_inner_reflex}")
-        print(f"基准反射球面的接收比: {raw_ball_square / (np.pi * (FAST.D / 2) ** 2)}")
+        text1 = f"调节后馈源舱的接收比: {raw_square / s_inner_reflex}"
+        text2 = f"基准反射球面的接收比: {raw_ball_square / (np.pi * (FAST.D / 2) ** 2)}"
+        print(text1)
+        print(text2)
+        with open('p3.txt', 'w', encoding='utf-8') as f:
+            f.writelines([text1, text2])
+        logger.warning(f"Saving p3.txt...")
 
 
 def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: bool = True, wait_time: int = 0,
@@ -313,7 +318,6 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: b
     except Exception as e:
         logger.error('保存模型文件出错: %s' % str(e))
         traceback.print_exc()
-    logger.info('ALL DONE')
 
 
 def test_rotation(model: FAST):
@@ -395,3 +399,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
     logger.info(f'参数: {args}')
     main(**args.__dict__)
+    logger.info('ALL DONE')

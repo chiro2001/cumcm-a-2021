@@ -32,7 +32,8 @@ class FAST(nn.Module):
         self.count_nodes: int = None
         self.count_triangles: int = None
         self.expands: nn.Parameter = None
-        self.position_raw = None
+        self.position_raw: torch.Tensor = None
+        self.position_fixed: torch.Tensor = None
         self.position: torch.Tensor = None
         self.actuator_head: torch.Tensor = None
         self.actuator_base: torch.Tensor = None
@@ -41,6 +42,7 @@ class FAST(nn.Module):
         self.index: dict = {}
         self.paddings_raw: torch.Tensor = None
         self.unit_vectors: torch.Tensor = None
+        self.unit_vectors_fixed: torch.Tensor = None
         self.boards: torch.Tensor = None
 
         self.nodes_data: dict = None
@@ -89,6 +91,8 @@ class FAST(nn.Module):
         # print([self.nodes_data[name]['position'] for name in self.name_list])
         self.position = torch.from_numpy(np.array([self.nodes_data[name]['position'] for name in self.name_list])).to(
             self.device)
+        # if self.position_fixed is None:
+        self.position_fixed = self.position_raw.clone()
         self.actuator_head = torch.from_numpy(
             np.array([self.nodes_data[name]['actuator_head'] for name in self.name_list])).to(self.device)
         self.actuator_base = torch.from_numpy(
@@ -100,6 +104,8 @@ class FAST(nn.Module):
         self.unit_vectors = torch.from_numpy(np.array(
             [get_unit_vector(self.position_raw[i], self.actuator_base[i]).cpu().numpy() for i in
              range(self.count_nodes)])).to(self.device)
+        # if self.unit_vectors_fixed is None:
+        self.unit_vectors_fixed = self.unit_vectors.clone()
         # 每个节点的伸展长度
         # if self.init_randomly:
         #     self.expands = nn.Parameter(torch.rand(self.count_nodes, dtype=torch.float64) * 1.2 - 0.6)
@@ -189,7 +195,7 @@ class FAST(nn.Module):
         return expand_filled
 
     # 计算在当前伸缩值状态下，主索节点的位置
-    def update_position(self, expand_source=None, enlarge: float = 1):
+    def update_position(self, expand_source=None, position_raw_source: torch.Tensor = None, unit_vector_source: torch.Tensor = None, enlarge: float = 1):
         if expand_source is None:
             self.limit_expands()
             expand_source = self.expands
@@ -199,6 +205,10 @@ class FAST(nn.Module):
                 expand_source = torch.as_tensor(expand_source)
             else:
                 expand_source = torch.clamp(expand_source, torch.tensor(-0.6), torch.tensor(0.6))
+        if position_raw_source is None:
+            position_raw_source = self.position_raw
+        if unit_vector_source is None:
+            unit_vector_source = self.unit_vectors
         # print(self.position_raw, self.unit_vectors, self.expands)
         # print(self.unit_vectors, self.expands)
         # print(self.unit_vectors.shape, self.expands.shape)
@@ -206,9 +216,9 @@ class FAST(nn.Module):
         #                                               torch.reshape(self.expands, (len(self.expands), 1)))
         # print("Why!")
         expand_filled = self.get_expand_filled(expand_source=expand_source)
-        m = self.unit_vectors * enlarge * expand_filled.reshape((self.count_nodes, 1))
+        m = unit_vector_source * enlarge * expand_filled.reshape((self.count_nodes, 1))
         # m = torch.matmul(self.unit_vectors, self.expands)
-        position = self.position_raw + m
+        position = position_raw_source + m
         # print(self.position.shape)
         # for i in range(self.count_nodes):
         #     self.position[i] = self.position_raw[i] + self.unit_vectors[i] * self.expands[i]
@@ -316,6 +326,7 @@ class FAST(nn.Module):
         count_surface = 0
         # 得到底部顶点
         vertex = self.get_vertex()
+        logger.warning(f'f = {torch.abs(vertex) - (1 - FAST.F) * FAST.R}, z = x**2 / (4 * f) + y**2 / (4 * f) + vertex')
         # for board in self.boards:
         for index_node in range(len(self.boards)):
             board = self.boards[index_node]

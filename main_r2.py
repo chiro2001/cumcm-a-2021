@@ -50,6 +50,8 @@ def draw_thread(source: torch.Tensor = None):
         # enlarge: float = 500
         wait_time: int = g_draw_kwargs.get('wait_time', 0)
         enlarge: float = g_draw_kwargs.get('enlarge', 500)
+        alpha: float = g_draw_kwargs.get('alpha', 0)
+        beta: float = g_draw_kwargs.get('beta', 0)
         if source is None:
             if g_exit:
                 return
@@ -102,13 +104,23 @@ def draw_thread(source: torch.Tensor = None):
         # 画 expands
         plt.plot([i for i in range(len(expands_raw))], expands_raw)
 
-        def draw_it(expands_, c='g'):
-            position: torch.Tensor = model_.update_position(expand_source=expands_, enlarge=enlarge)
+        def draw_it(expands_, c='g', enlarge_: float = 1):
+            # position: torch.Tensor = model_.update_position(expand_source=expands_, enlarge=enlarge_)
+            position: torch.Tensor = model_.update_position(expand_source=expands_, enlarge=enlarge_, 
+                                                            position_raw_source=model_.position_fixed, 
+                                                            unit_vector_source=model_.unit_vectors_fixed)
+            # m = get_rotation_matrix(alpha, beta).to(model_.device)
+            # position2 = torch.mm(m, position.transpose(0, 1)).transpose(0, 1)
             points = position.clone().detach().cpu().numpy()
+            # points2 = position2.clone().detach().cpu().numpy()
             ax.scatter3D(points.T[0], points.T[1], points.T[2], c=c, marker='.')
+            # ax.scatter3D(points2.T[0], points2.T[1], points2.T[2], c='m', marker='.')
+        
+        # expands_real_raw = torch.zeros(expands_raw.shape, dtype=torch.float64, device=model_.device)
 
         # print('expands', expands_raw)
-        draw_it(expands_raw, 'g')
+        # draw_it(expands_real_raw, c='m', enlarge_=1)
+        draw_it(expands_raw, c='g', enlarge_=enlarge)
         # draw_it(expands_raw, 'm')
 
         # ax2.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
@@ -194,9 +206,11 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: b
             loss.backward()
             optimizer.step()
             print(model.expands)
+            alpha_, beta_ = map(lambda x: x / 360 * 2 * np.pi, [alpha, beta])
             if show:
                 # draw(model, wait_time=wait_time, enlarge=100)
-                draw(model, wait_time=wait_time, enlarge=enlarge)
+                # draw(model, wait_time=wait_time, enlarge=enlarge, alpha=(-alpha_), beta=(beta_ - np.pi / 2))
+                draw(model, wait_time=wait_time, enlarge=enlarge, alpha=alpha_, beta=beta_)
     except KeyboardInterrupt:
         pass
     g_exit = True

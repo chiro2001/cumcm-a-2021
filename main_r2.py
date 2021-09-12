@@ -44,7 +44,15 @@ class FAST(nn.Module):
         self.unit_vectors: torch.Tensor = None
         self.boards: torch.Tensor = None
 
-        self.loss_weights: torch.Tensor = torch.tensor([5, 2e3, 1e-4]).to(self.device)
+        # self.loss_weights: torch.Tensor = torch.tensor([1e-1, 2e4, 1e-3]).to(self.device)
+        # self.loss_weights: torch.Tensor = torch.tensor([5, 2e3, 1e-4]).to(self.device)
+        self.loss_weights: torch.Tensor = torch.tensor([
+            kwargs.get('w1', 5),
+            kwargs.get('w2', 2e3),
+            kwargs.get('w3', 1e-4)
+        ]).to(self.device)
+        logger.info(f'set weight to: {self.loss_weights.clone().detach().numpy()}')
+        # self.loss_weights: torch.Tensor = torch.tensor([5, 2e3, 1e-9]).to(self.device)
         self.vertex: nn.Parameter = nn.Parameter(torch.tensor(-FAST.R)).to(self.device)
 
         self.read_data()
@@ -143,6 +151,13 @@ class FAST(nn.Module):
         # 到设备
         self.to(self.device)
 
+    def get_expand_filled(self, expand_source: torch.Tensor) -> torch.Tensor:
+        expand_filled = torch.zeros(self.count_nodes, device=self.device, dtype=torch.float64)
+        for r in range(len(self.ring_selection)):
+            ring = self.ring_selection[r]
+            expand_filled[ring[0]: ring[1]] = expand_source[r]
+        return expand_filled
+
     # 计算在当前伸缩值状态下，主索节点的位置
     def update_position(self, expand_source=None):
         if expand_source is None:
@@ -159,11 +174,8 @@ class FAST(nn.Module):
         # self.position = self.position_raw + torch.dot(self.unit_vectors,
         #                                               torch.reshape(self.expands, (len(self.expands), 1)))
         # print("Why!")
-        expand_temp = torch.zeros(self.count_nodes, device=self.device, dtype=torch.float64)
-        for r in range(len(self.ring_selection)):
-            ring = self.ring_selection[r]
-            expand_temp[ring[0] : ring[1]] = expand_source[r]
-        m = self.unit_vectors * expand_temp.reshape((self.count_nodes, 1))
+        expand_filled = self.get_expand_filled(expand_source=expand_source)
+        m = self.unit_vectors * expand_filled.reshape((self.count_nodes, 1))
         # m = torch.matmul(self.unit_vectors, self.expands)
         position = self.position_raw + m
         # print(self.position.shape)
@@ -461,16 +473,18 @@ def draw(model: FAST, **kwargs):
 def draw_thread(source: torch.Tensor = None):
     global g_frame, g_fig
     while True:
-        wait_time: int = 0
-        enlarge: float = 500
+        # wait_time: int = 0
+        # enlarge: float = 500
+        wait_time: int = g_draw_kwargs.get('wait_time', 0)
+        enlarge: float = g_draw_kwargs.get('enlarge', 500)
         if source is None:
             if g_exit:
                 return
             if g_frame is None or model_ is None:
                 time.sleep(0.05)
                 continue
-            wait_time: int = g_draw_kwargs.get('wait_time', 0)
-            enlarge: float = g_draw_kwargs.get('enlarge', 500)
+            # wait_time: int = g_draw_kwargs.get('wait_time', 0)
+            # enlarge: float = g_draw_kwargs.get('enlarge', 500)
             if wait_time < 0:
                 if g_fig is not None:
                     try:
@@ -507,12 +521,12 @@ def draw_thread(source: torch.Tensor = None):
             expands = source * enlarge
             expands_raw = source
 
-        fig2 = plt.figure(dpi=80)
-        ax2 = plt.axes()
-        # ax2 = plt.subplot(2, 2, 1)
-        plt.sca(ax2)
-        # 画 expands
-        plt.plot([i for i in range(len(expands_raw))], expands_raw)
+        # fig2 = plt.figure(dpi=80)
+        # ax2 = plt.axes()
+        # # ax2 = plt.subplot(2, 2, 1)
+        # plt.sca(ax2)
+        # # 画 expands
+        # plt.plot([i for i in range(len(expands_raw))], expands_raw)
 
         def draw_it(expands_, c='g'):
             position: torch.Tensor = model_.update_position(expand_source=expands_)
@@ -548,7 +562,7 @@ def draw_thread(source: torch.Tensor = None):
             plt.draw()
             plt.pause(3)
             plt.close(fig1)
-            plt.close(fig2)
+            # plt.close(fig2)
             break
 
 
@@ -589,7 +603,7 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: b
             optimizer.step()
             print(model.expands)
             if show:
-                draw(model, wait_time=wait_time, enlarge=1)
+                draw(model, wait_time=wait_time, enlarge=100)
     except KeyboardInterrupt:
         pass
     g_exit = True
@@ -597,9 +611,10 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: b
     try:
         logger.info(f'Saving expands data to: {out}')
         writer = pd.ExcelWriter(out, engine='xlsxwriter')
+        expand_filled = model.get_expand_filled(expand_source=model.expands.cpu().detach()).numpy()
         df = pd.DataFrame({
             '对应主索节点编号': model.name_list,
-            '伸缩量（米）': model.expands.cpu().detach().numpy(),
+            '伸缩量（米）': expand_filled,
             '': ['' for _ in range(model.count_nodes)],
             '注：至少保留3位小数': ['' for _ in range(model.count_nodes)]
         })
@@ -689,6 +704,10 @@ if __name__ == '__main__':
     parser.add_argument('-m', '--module-path', type=str, default='data/module.pth', help='设置模型保存路径')
     # parser.add_argument('-t', '--load-path', type=str, default='data/module.pth', help='设置模型加载路径')
     parser.add_argument('-t', '--load-path', type=str, default=None, help='设置模型加载路径')
+    weight_default = [5, 2e3, 1e-4]
+    parser.add_argument('-w1', '--w1', type=float, default=weight_default[0], help='设置权值1')
+    parser.add_argument('-w2', '--w2', type=float, default=weight_default[1], help='设置权值2')
+    parser.add_argument('-w3', '--w3', type=float, default=weight_default[2], help='设置权值3')
     args = parser.parse_args()
     logger.info(f'参数: {args}')
     main(**args.__dict__)

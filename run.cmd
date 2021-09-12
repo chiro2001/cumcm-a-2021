@@ -1,6 +1,6 @@
 @echo 看看初始状态
 
-python main_r2.py ^
+python main.py ^
   --learning-rate 0.0001 ^
   --device cpu ^
   --module-path data/none.pth ^
@@ -13,7 +13,7 @@ python main_r2.py ^
 
 del vertex.txt
 
-python main_r2.py ^
+python main.py ^
   --learning-rate 0.0001 ^
   --device cpu ^
   --module-path data/temp.pth ^
@@ -27,7 +27,7 @@ python main_r2.py ^
 
 @echo 保存第 2 题结果到 Excel
 
-python main_r2.py ^
+python main.py ^
   --learning-rate 0.0001 ^
   --device cpu ^
   --module-path data/temp.pth ^
@@ -43,7 +43,7 @@ python main_r2.py ^
 
 @echo 计算第 3 问数据
 
-python main_r2.py ^
+python main.py ^
   --learning-rate 0.0001 ^
   --device cpu ^
   --module-path data/temp.pth ^

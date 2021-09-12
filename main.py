@@ -5,7 +5,6 @@ import time
 import matplotlib.pyplot as plt
 import traceback
 import torch.optim as optim
-from torch import nn
 from tqdm import trange
 import threading
 from utils import *
@@ -13,8 +12,10 @@ import cv2
 from base_logger import logger
 from fast import FAST
 
+# 是否使用多线程显示图像
 draw_threaded: bool = False
 
+# 一些全局变量
 g_fig = None
 g_frame: np.ndarray = None
 g_draw_kwargs: dict = None
@@ -31,6 +32,8 @@ def draw(model: FAST, **kwargs):
         g_draw_kwargs = kwargs
         draw_thread(source=model.expands.clone().cpu().detach().numpy())
 
+    # 使用 opencv 绘制图像以便观察
+    # import cv2
     # frame = model.expands.clone().cpu().detach().numpy()
     # position = model.update_position(expand_source=frame)
     # size = (int(position.transpose(0, 1)[0].max() - position.transpose(0, 1)[0].min() + 1),
@@ -44,11 +47,10 @@ def draw(model: FAST, **kwargs):
     #     cv2.waitKey(1)
 
 
+# 绘图函数
 def draw_thread(source: torch.Tensor = None):
     global g_frame, g_fig
     while True:
-        # wait_time: int = 0
-        # enlarge: float = 500
         wait_time: int = g_draw_kwargs.get('wait_time', 0)
         enlarge: float = g_draw_kwargs.get('enlarge', 500)
         alpha: float = g_draw_kwargs.get('alpha', 0)
@@ -59,8 +61,6 @@ def draw_thread(source: torch.Tensor = None):
             if g_frame is None or model_ is None:
                 time.sleep(0.05)
                 continue
-            # wait_time: int = g_draw_kwargs.get('wait_time', 0)
-            # enlarge: float = g_draw_kwargs.get('enlarge', 500)
             if wait_time < 0:
                 if g_fig is not None:
                     try:
@@ -99,19 +99,15 @@ def draw_thread(source: torch.Tensor = None):
             expands_raw = source
 
         def draw_it(expands_, c='g', enlarge_: float = 1):
-            # position: torch.Tensor = model_.update_position(expand_source=expands_, enlarge=enlarge_)
+            # 直接使用未经变换的向量从而取得原来的视角
             position: torch.Tensor = model_.update_position(expand_source=expands_, enlarge=enlarge_,
                                                             position_raw_source=model_.position_fixed,
                                                             unit_vector_source=model_.unit_vectors_fixed)
-            # m = get_rotation_matrix(alpha, beta).to(model_.device)
-            # position2 = torch.mm(m, position.transpose(0, 1)).transpose(0, 1)
             points = position.clone().detach().cpu().numpy()
-            # points2 = position2.clone().detach().cpu().numpy()
             ax.scatter3D(points.T[0], points.T[1], points.T[2], c=c, marker='.')
-            # ax.scatter3D(points2.T[0], points2.T[1], points2.T[2], c='m', marker='.')
 
+        # 绘制不放大的图
         # expands_real_raw = torch.zeros(expands_raw.shape, dtype=torch.float64, device=model_.device)
-
         # print('expands', expands_raw)
         # draw_it(expands_real_raw, c='m', enlarge_=1)
         draw_it(expands_raw, c='g', enlarge_=enlarge)
@@ -142,6 +138,7 @@ def draw_thread(source: torch.Tensor = None):
         else:
             # fig = plt.figure(1)
             # plt.draw()
+            # 保存图像
             if g_draw_kwargs.get('save_image', True):
                 problem = 'p1' if alpha == 0 else 'p2'
                 filename1, filename2 = f"pics/{problem}/{model_.mode}_x{int(enlarge)}_fixed.png", \
@@ -162,21 +159,24 @@ def calc(model: FAST):
     with torch.no_grad():
         # 计算内反射面的反射信号
         s_inner_reflex = np.pi * FAST.R_SURFACE ** 2
+        # 总之先推理一遍试试
         loss_total = model()
         raw_square = model.get_light_loss(get_raw_surface=True)
         # 求基准反射球面的反射面积
-        # model.expands = model.expands * 0
+        # 取另一个新的模型，其中的伸缩量就是 0
         model2 = FAST()
         raw_ball_square = model2.get_light_loss(get_raw_square=True)
+        # 将第三题结果写入文件
         text1 = f"调节后馈源舱的接收比: {raw_square / s_inner_reflex}"
         text2 = f"基准反射球面的接收比: {raw_ball_square / (np.pi * (FAST.D / 2) ** 2)}"
         print(text1)
         print(text2)
         with open('data/p3.txt', 'w', encoding='utf-8') as f:
-            f.writelines([text1, text2])
+            f.write(f"{text1}\r\n{text2}")
         logger.warning(f"Saving p3.txt...")
 
 
+# 运行主函数
 def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: bool = True, wait_time: int = 0,
          out: str = 'data/附件4.xlsx', module_path: str = None, load_path: str = None, enlarge: float = 500,
          mode: str = 'ring', save_image: bool = True, save_only: bool = False, calc_only: bool = False, **kwargs):
@@ -212,10 +212,13 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: b
     # 旋转模型
     # test_rotation(model)
     model.rotate(alpha, beta, unit_degree=True)
+
+    # 亿些测试
     # test_triangle_order(model)
     # test_r2(model)
     # exit()
 
+    # 仅仅计算第三题
     if calc_only:
         calc(model)
         return
@@ -320,6 +323,7 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: b
         traceback.print_exc()
 
 
+# 测试：整体旋转模型
 def test_rotation(model: FAST):
     for beta in range(45, 90, 5):
         model.rotate(0, beta, unit_degree=True)
@@ -329,6 +333,7 @@ def test_rotation(model: FAST):
     exit()
 
 
+# 测试：测试原来三角形数据顺序
 def test_triangle_order(model: FAST):
     im = np.zeros((500, 500), dtype=np.uint8)
     for i in range(model.count_triangles):
@@ -341,6 +346,7 @@ def test_triangle_order(model: FAST):
     cv2.waitKey(0)
 
 
+# 测试：z 坐标对于同一高度的点的汇集程度
 def test_r2(model: FAST):
     position_raw = model.position_raw.clone().cpu().detach().numpy()
     step = 1
@@ -373,6 +379,7 @@ def test_r2(model: FAST):
 model_: FAST = None
 
 if __name__ == '__main__':
+    # 以下为命令行参数配置，使用 python main.py -h 以得知具体使用方法
     parser = argparse.ArgumentParser()
     parser.add_argument('-a', '--alpha', type=float, default=0, help='设置 alpha 角（单位：度）')
     parser.add_argument('-b', '--beta', type=float, default=90, help='设置 beta 角（单位：度）')
@@ -399,4 +406,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
     logger.info(f'参数: {args}')
     main(**args.__dict__)
-    logger.info('ALL DONE')
+    logger.info('=== [ALL DONE] ===')

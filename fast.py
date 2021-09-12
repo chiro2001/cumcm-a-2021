@@ -1,13 +1,6 @@
 import pandas as pd
-import time
-import matplotlib.pyplot as plt
 from torch import nn
-import traceback
-import torch.optim as optim
-from tqdm import trange
-import threading
 from utils import *
-import cv2
 from base_logger import logger
 
 
@@ -54,15 +47,13 @@ class FAST(nn.Module):
 
         self.mode = FAST.MODE_RING
 
-        # self.loss_weights: torch.Tensor = torch.tensor([1e-1, 2e4, 1e-3]).to(self.device)
-        # self.loss_weights: torch.Tensor = torch.tensor([5, 2e3, 1e-4]).to(self.device)
         self.loss_weights: torch.Tensor = torch.tensor([
             kwargs.get('w1', 5),
             kwargs.get('w2', 2e3),
             kwargs.get('w3', 1e-4)
         ]).to(self.device)
         logger.info(f'set weight to: {self.loss_weights.clone().detach().numpy()}')
-        # self.loss_weights: torch.Tensor = torch.tensor([5, 2e3, 1e-9]).to(self.device)
+        # 顶点位置（z 坐标）
         self.vertex: nn.Parameter = nn.Parameter(torch.tensor(-FAST.R)).to(self.device)
 
         self.ring_selection: list = None
@@ -97,7 +88,6 @@ class FAST(nn.Module):
             self.index_fixed = copy.deepcopy(self.index)
         self.position_raw = torch.from_numpy(
             np.array([self.nodes_data[name]['position_raw'] for name in self.name_list])).to(self.device)
-        # print([self.nodes_data[name]['position'] for name in self.name_list])
         self.position = torch.from_numpy(np.array([self.nodes_data[name]['position'] for name in self.name_list])).to(
             self.device)
         if self.position_fixed is None:
@@ -111,9 +101,6 @@ class FAST(nn.Module):
         self.actuator_base = torch.from_numpy(
             np.array([self.nodes_data[name]['actuator_base'] for name in self.name_list])).to(self.device)
 
-        # self.unit_vectors = torch.from_numpy(np.array(
-        #     [get_unit_vector(self.position_raw[i], self.actuator_base[i]).cpu().numpy() for i in
-        #      range(self.count_nodes)]).T).to(self.device)
         self.unit_vectors = torch.from_numpy(np.array(
             [get_unit_vector(self.position_raw[i], self.actuator_base[i]).cpu().numpy() for i in
              range(self.count_nodes)])).to(self.device)
@@ -123,11 +110,6 @@ class FAST(nn.Module):
             if 'unit_vectors_fixed' in self.nodes_data[self.name_list[0]]:
                 self.unit_vectors_fixed = torch.from_numpy(
                     np.array([self.nodes_data[name]['unit_vectors_fixed'] for name in self.name_list])).to(self.device)
-        # 每个节点的伸展长度
-        # if self.init_randomly:
-        #     self.expands = nn.Parameter(torch.rand(self.count_nodes, dtype=torch.float64) * 1.2 - 0.6)
-        # else:
-        #     self.expands = nn.Parameter(torch.zeros(self.count_nodes, dtype=torch.float64))
         # 准备好 boards 数据
         self.boards = self.get_boards().to(self.device)
         self.paddings_raw = self.get_paddings(source=self.position_raw)
@@ -205,7 +187,6 @@ class FAST(nn.Module):
                 d: torch.Tensor = expand_source[r]
                 for i in range(ring[0], ring[1]):
                     expand_filled[i] = d.clone()
-                # expand_filled[ring[0]: ring[1]] = torch.stack([d.clone() for _ in range(ring[0], ring[1])])
             else:
                 ring = self.ring_selection[r]
                 expand_filled[ring[0]: ring[1]] = expand_source[r]
@@ -227,19 +208,9 @@ class FAST(nn.Module):
             position_raw_source = self.position_raw
         if unit_vector_source is None:
             unit_vector_source = self.unit_vectors
-        # print(self.position_raw, self.unit_vectors, self.expands)
-        # print(self.unit_vectors, self.expands)
-        # print(self.unit_vectors.shape, self.expands.shape)
-        # self.position = self.position_raw + torch.dot(self.unit_vectors,
-        #                                               torch.reshape(self.expands, (len(self.expands), 1)))
-        # print("Why!")
         expand_filled = self.get_expand_filled(expand_source=expand_source)
         m = unit_vector_source * enlarge * expand_filled.reshape((self.count_nodes, 1))
-        # m = torch.matmul(self.unit_vectors, self.expands)
         position = position_raw_source + m
-        # print(self.position.shape)
-        # for i in range(self.count_nodes):
-        #     self.position[i] = self.position_raw[i] + self.unit_vectors[i] * self.expands[i]
         return position
 
     # 判断当前伸缩条件下能否满足伸缩量限制
@@ -249,8 +220,6 @@ class FAST(nn.Module):
 
     # 数一数有多少个伸缩量不满足要求
     def count_illegal_expands(self) -> int:
-        # ones = torch.ones(self.expands.shape, device=self.device, dtype=torch.float64)
-        # zeros = torch.zeros(self.expands.shape, device=self.device, dtype=torch.float64)
         count_1 = torch.where(-0.6 > self.expands, 1., 0.)
         count_2 = torch.where(0.6 < self.expands, 1., 0.)
         count = count_1 + count_2
@@ -262,12 +231,6 @@ class FAST(nn.Module):
         d = torch.abs(paddings - self.paddings_raw)
         count = torch.where(d > 0.0007 * self.paddings_raw, 1., 0.)
         return count.sum() == 0
-        # return torch.sum(torch.tensor([
-        #     torch.sum(torch.tensor([
-        #         (1 if (torch.abs(paddings[i][j] - self.paddings_raw[i][j]) < 0.0007 * self.paddings_raw[i][j]) else 0)
-        #         for j in range(3)
-        #     ])) for i in range(len(paddings))
-        # ])) == 0
 
     # 得到间隔误差
     def get_padding_loss(self, weight: float = 1) -> torch.Tensor:
@@ -278,36 +241,12 @@ class FAST(nn.Module):
                 return torch.tensor(0)
             else:
                 w = w * 0.5
-
-        # length = len(paddings)
-        # r = torch.sum(torch.from_numpy(
-        #     np.array([
-        #         torch.sum(torch.tensor([
-        #             (paddings[i][j] - self.paddings_raw[i][j]) ** 2 for j in range(3)
-        #         ])).numpy() for i in range(length)
-        #     ]) ** 2
-        # ))
         r = torch.sum(((paddings - self.paddings_raw) ** 2).flatten()) * w
         return r * weight
 
     # 处理限制伸缩量
     def limit_expands(self):
-        # self.expands = nn.Parameter(torch.clamp(self.expands, torch.tensor(-0.6), torch.tensor(0.6)))
         self.expands.data.clamp_(torch.tensor(-0.6), torch.tensor(0.6))
-
-    # # 处理限制间隔误差
-    # def limit_paddings(self):
-    #     orders = [
-    #         [1, 2],
-    #         [0, 2],
-    #         [0, 1]
-    #     ]
-    #     for i in range(len(self.count_triangles) - 1, 0, -1):
-    #         board = self.boards[i]
-    #         distance: torch.Tensor = board.transpose(0, 1)[0] ** 2 + board.transpose(0, 1)[1] ** 2
-    #         # 选定最近的那个点
-    #         select = torch.argmin(distance)
-    #         near = board[select]
 
     # 得到伸缩误差
     def get_expand_loss(self, weight: float = 1) -> torch.Tensor:
@@ -335,10 +274,9 @@ class FAST(nn.Module):
                 center = get_board_center(board)
                 theta = torch.arccos(
                     torch.abs(torch.dot(n_panel, torch.as_tensor([0, 0, 1]) / torch.sqrt(torch.sum(n_panel ** 2)))))
-                # theta = np.arccos(np.abs(np.cross(n_panel, [0, 0, 1]) / np.sqrt(np.sum(n_panel ** 2))))
                 n_l1 = center - torch.as_tensor([0, 0, -(1 - FAST.F) * FAST.R])
                 theta2 = torch.arccos(torch.abs(torch.dot(n_panel, n_l1) / (
-                            torch.sqrt(torch.sum(n_l1 ** 2)) * torch.sqrt(torch.sum(n_panel ** 2)))))
+                        torch.sqrt(torch.sum(n_l1 ** 2)) * torch.sqrt(torch.sum(n_panel ** 2)))))
                 if not theta - delta_theta <= theta2 <= theta + delta_theta:
                     continue
                 s1 = S * torch.cos(theta * 2)
@@ -375,10 +313,6 @@ class FAST(nn.Module):
             # 反射板中心
             center = get_board_center(board)
             # 在半径 150m 以外的板子不计算拟合精度误差
-            # a = board.transpose(0, 1)
-            # b = board.transpose(0, 1)[0]
-            # c = board.transpose(0, 1)[0].max()
-
             if board.transpose(0, 1)[0].max() ** 2 + board.transpose(0, 1)[1].max() ** 2 <= FAST.R_SURFACE ** 2:
                 count_surface += 1
                 n_plane, D = triangle_to_plane(board)
@@ -432,7 +366,6 @@ class FAST(nn.Module):
                 ])
                 # 标准化向量
                 n_surface, n_board = torch.abs(normalizing(n_surface)), torch.abs(normalizing(n_board))
-                # n_surface, n_board = -normalizing(n_surface), normalizing(n_board)
                 # 求点积
                 dot = torch.dot(n_surface, n_board)
                 loss_sum += dot
@@ -444,7 +377,7 @@ class FAST(nn.Module):
                 # print(board.transpose(0, 1)[0].max() ** 2 + board.transpose(0, 1)[1].max() ** 2)
                 continue
 
-        # logger.warning(f'ALL: 1 -Sigma dot = {1 - (loss_sum / count_surface)}')
+        # logger.warning(f'ALL: 1 - Sigma dot = {1 - (loss_sum / count_surface)}')
         r = (1 - (loss_sum / count_surface)) * weight
         return r
 
@@ -468,7 +401,6 @@ class FAST(nn.Module):
         return loss
 
     def get_board(self, triangle) -> torch.Tensor:
-        # return torch.from_numpy(np.array([self.position[self.index[triangle[i]]].detach().numpy() for i in range(3)]))
         r = torch.stack([self.position[self.index[triangle[i]]] for i in range(3)])
         return r
 
@@ -487,6 +419,7 @@ class FAST(nn.Module):
 
     # 得到抛物面的顶点
     def get_vertex(self) -> torch.Tensor:
+        # 方法 1
         # board = self.get_bottom_board()
         # if board is None:
         #     raise Exception("取得顶点参考板错误！")
@@ -497,6 +430,7 @@ class FAST(nn.Module):
         # n, D = triangle_to_plane(board)
         # return -D / n[2]
 
+        # 方法 2
         # boards_selected = self.boards[:(1 + 5 + 10 + 15 + 20)]
         # length = len(boards_selected)
         # board_ave = torch.sum(boards_selected.transpose(0, 1), dim=1) / length
@@ -504,8 +438,11 @@ class FAST(nn.Module):
         # print('-z =', -z, 'R =', FAST.R)
         # return z
 
-        return self.vertex
+        # 方法 3
         # return torch.tensor(-300.4)
+
+        # 方法 4
+        return self.vertex
 
     # 整体旋转整个模型
     def rotate(self, alpha: float, beta: float, unit_degree: bool = False):
@@ -513,12 +450,7 @@ class FAST(nn.Module):
             alpha = alpha / 360 * np.pi * 2
             beta = beta / 360 * np.pi * 2
         m = get_rotation_matrix(alpha, beta).to(self.device)
-        # self.position = torch.mm(self.position, m)
-        # self.position_raw = torch.mm(self.position_raw, m)
-        # self.actuator_head = torch.mm(self.actuator_head, m)
-        # self.actuator_base = torch.mm(self.actuator_base, m)
-        # self.unit_vectors = torch.mm(self.unit_vectors, m)
-        # print(m.shape, self.position.shape)
+        # 进行一个坐标的变换
         self.position = torch.mm(m, self.position.transpose(0, 1)).transpose(0, 1)
         self.position_raw = torch.mm(m, self.position_raw.transpose(0, 1)).transpose(0, 1)
         self.actuator_head = torch.mm(m, self.actuator_head.transpose(0, 1)).transpose(0, 1)
@@ -538,7 +470,7 @@ class FAST(nn.Module):
 
         self.sort_z()
 
-    # 计算主索节点位置
+    # 计算主索节点位置和 loss，并且自动记录求导信息
     def forward(self):
         self.position = self.update_position()
         loss = self.get_loss()

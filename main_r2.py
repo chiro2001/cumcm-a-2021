@@ -72,7 +72,7 @@ def draw_thread(source: torch.Tensor = None):
 
         # fig1 = plt.figure(1, figsize=(4, 4), dpi=80)
         # plt.clf()
-        fig1 = plt.figure(dpi=80)
+        fig1 = plt.figure(dpi=360, figsize=(10, 10))
 
         plt.xlim(-300, 300)
         plt.ylim(-300, 300)
@@ -97,17 +97,10 @@ def draw_thread(source: torch.Tensor = None):
             # expands = source * enlarge
             expands_raw = source
 
-        fig2 = plt.figure(dpi=80)
-        ax2 = plt.axes()
-        # ax2 = plt.subplot(2, 2, 1)
-        plt.sca(ax2)
-        # 画 expands
-        plt.plot([i for i in range(len(expands_raw))], expands_raw)
-
         def draw_it(expands_, c='g', enlarge_: float = 1):
             # position: torch.Tensor = model_.update_position(expand_source=expands_, enlarge=enlarge_)
-            position: torch.Tensor = model_.update_position(expand_source=expands_, enlarge=enlarge_, 
-                                                            position_raw_source=model_.position_fixed, 
+            position: torch.Tensor = model_.update_position(expand_source=expands_, enlarge=enlarge_,
+                                                            position_raw_source=model_.position_fixed,
                                                             unit_vector_source=model_.unit_vectors_fixed)
             # m = get_rotation_matrix(alpha, beta).to(model_.device)
             # position2 = torch.mm(m, position.transpose(0, 1)).transpose(0, 1)
@@ -115,7 +108,7 @@ def draw_thread(source: torch.Tensor = None):
             # points2 = position2.clone().detach().cpu().numpy()
             ax.scatter3D(points.T[0], points.T[1], points.T[2], c=c, marker='.')
             # ax.scatter3D(points2.T[0], points2.T[1], points2.T[2], c='m', marker='.')
-        
+
         # expands_real_raw = torch.zeros(expands_raw.shape, dtype=torch.float64, device=model_.device)
 
         # print('expands', expands_raw)
@@ -123,17 +116,19 @@ def draw_thread(source: torch.Tensor = None):
         draw_it(expands_raw, c='g', enlarge_=enlarge)
         # draw_it(expands_raw, 'm')
 
-        # ax2.scatter3D(points.T[0], points.T[1], points.T[2], c="g", marker='.')
-        # X, Y = np.meshgrid(points.T[0], points.T[1])
-        # Z = (1 - X / 2 + X ** 3 + Y ** 4) * np.exp(-X ** 2 - Y ** 2)
-        # plt.contourf(X, Y, Z)
+        fig2 = plt.figure(dpi=120)
+        ax2 = plt.axes()
+        # ax2 = plt.subplot(2, 2, 1)
+        plt.sca(ax2)
+        # 画 expands
+        plt.plot([i for i in range(len(expands_raw))], expands_raw)
 
         if source is None:
             # if wait_time == 0:
             #     plt.show()
             if 0 > wait_time:
                 plt.show()
-                time.sleep(t)
+                time.sleep(wait_time)
             if 0 == wait_time:
                 plt.draw()
                 t = wait_time + 0.5
@@ -145,7 +140,14 @@ def draw_thread(source: torch.Tensor = None):
             plt.clf()
         else:
             # fig = plt.figure(1)
-            plt.draw()
+            # plt.draw()
+            if g_draw_kwargs.get('save_image', True):
+                problem = 'p1' if alpha == 0 else 'p2'
+                filename1, filename2 = f"pics/{problem}/{model_.mode}_x{int(enlarge)}_fixed.png", \
+                                       f"pics/{problem}/{model_.mode}_expands.png"
+                logger.warning(f'saving images to {filename1}, {filename2}')
+                fig1.savefig(filename1)
+                fig2.savefig(filename2)
             plt.pause(wait_time if wait_time != 0 else 3)
             plt.close(fig1)
             plt.close(fig2)
@@ -153,9 +155,19 @@ def draw_thread(source: torch.Tensor = None):
             break
 
 
+def calc(model: FAST):
+    # 计算内反射面的反射信号
+    s_inner_reflex = np.pi * FAST.R_SURFACE ** 2
+    loss_total = model()
+    raw_square = model.get_light_loss(get_raw_div=True)
+    # 求基准反射球面的反射面积
+    model.expands = model.expands * torch.tensor(0)
+    raw_ball_square = model.get_light_loss(get_raw_square=True)
+
+
 def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: bool = True, wait_time: int = 0,
          out: str = 'data/附件4.xlsx', module_path: str = None, load_path: str = None, enlarge: float = 500,
-         mode: str = 'ring', **kwargs):
+         mode: str = 'ring', save_image: bool = True, save_only: bool = False, calc_only: bool = False, **kwargs):
     global model_, g_exit
     model_ = FAST(**kwargs)
     model = model_
@@ -192,6 +204,10 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: b
     # test_r2(model)
     # exit()
 
+    if calc_only:
+        calc(model)
+        return
+
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     try:
         for i in trange(1000):
@@ -210,26 +226,68 @@ def main(alpha: float = 0, beta: float = 0, learning_rate: float = 1e-4, show: b
             if show:
                 # draw(model, wait_time=wait_time, enlarge=100)
                 # draw(model, wait_time=wait_time, enlarge=enlarge, alpha=(-alpha_), beta=(beta_ - np.pi / 2))
-                draw(model, wait_time=wait_time, enlarge=enlarge, alpha=alpha_, beta=beta_)
+                draw(model, wait_time=wait_time, enlarge=enlarge, alpha=alpha_, beta=beta_, save_image=save_image)
+            if save_only:
+                raise KeyboardInterrupt("Save Only Mode")
     except KeyboardInterrupt:
-        pass
+        logger.warning(f'trying to save data...')
     g_exit = True
     # 进行一个文件的保存
     try:
         logger.info(f'Saving expands data to: {out}')
         writer = pd.ExcelWriter(out, engine='xlsxwriter')
+
+        if os.path.exists('vertex.txt'):
+            with open('vertex.txt', 'r', encoding='utf-8') as f:
+                vertex = float(f.read())
+            logger.warning('vertex loaded from vertex.txt.')
+        else:
+            with open('vertex.txt', 'w', encoding='utf-8') as f:
+                vertex = model.vertex.clone().cpu().detach().item()
+                f.write(str(vertex))
+            logger.warning('vertex saved to vertex.txt.')
+        pd.DataFrame({
+            'X坐标（米）': [0, ],
+            'Y坐标（米）': [0, ],
+            'Z坐标（米）': [vertex, ],
+            '': ['', ],
+            ' ': ['', ],
+            '注：至少保留3位小数': ['', ]
+        }).to_excel(writer, sheet_name='理想抛物面顶点坐标', index=False)
+        worksheet = writer.sheets['理想抛物面顶点坐标']
+        worksheet.set_column("A:F", 10.36)
+
+        points_fixed: torch.Tensor = model_.update_position(expand_source=model.expands.clone().cpu().detach().numpy(),
+                                                            position_raw_source=model_.position_fixed,
+                                                            unit_vector_source=model_.unit_vectors_fixed) \
+            .clone().detach().cpu().numpy()
+        points_fixed = np.array([points_fixed[model.index_fixed[name]] for name in model.name_list_fixed])
+        pd.DataFrame({
+            '节点编号': model.name_list_fixed,
+            'X坐标（米）': points_fixed.T[0],
+            'Y坐标（米）': points_fixed.T[1],
+            'Z坐标（米）': points_fixed.T[2],
+            '': ['' for _ in range(model.count_nodes)],
+            ' ': ['' for _ in range(model.count_nodes)],
+            '注：至少保留3位小数': ['' for _ in range(model.count_nodes)]
+        }).to_excel(writer, sheet_name='调整后主索节点编号及坐标', index=False)
+        worksheet = writer.sheets['调整后主索节点编号及坐标']
+        worksheet.set_column("A:G", 10.36)
+
         expand_filled = model.get_expand_filled(expand_source=model.expands.cpu().detach()).detach().numpy()
-        df = pd.DataFrame({
-            '对应主索节点编号': model.name_list,
-            '伸缩量（米）': expand_filled,
+        expand_filled_fixed = np.array([expand_filled[model.index_fixed[name]] for name in model.name_list_fixed])
+        pd.DataFrame({
+            '对应主索节点编号': model.name_list_fixed,
+            '伸缩量（米）': expand_filled_fixed,
             '': ['' for _ in range(model.count_nodes)],
             '注：至少保留3位小数': ['' for _ in range(model.count_nodes)]
-        })
-        df.to_excel(writer, sheet_name='Sheet1', index=False)
-        worksheet = writer.sheets['Sheet1']
-        worksheet.set_column("A:A", 4)
-        worksheet.set_column("B:B", 15)
-        worksheet.set_column("D:D", 50)
+        }).to_excel(writer, sheet_name='促动器顶端伸缩量', index=False)
+        worksheet = writer.sheets['促动器顶端伸缩量']
+        worksheet.set_column("A:A", 16.82)
+        worksheet.set_column("B:B", 13.82)
+        worksheet.set_column("C:C", 10.36)
+        worksheet.set_column("D:D", 10.36)
+
         writer.close()
     except Exception as e:
         logger.error('保存数据文件出错: %s' % str(e))
@@ -312,8 +370,10 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--optim', type=str, default='Adam', help='设置梯度下降函数')
     parser.add_argument('-d', '--device', type=str, default=None, help='设置 Tensor 计算设备')
     parser.add_argument('-s', '--show', type=bool, default=False, help='设置是否显示训练中图像')
+    parser.add_argument('-g', '--save-image', type=bool, default=True, help='设置是否保存图像数据')
+    parser.add_argument('-y', '--save-only', type=bool, default=False, help='设置只保存数据不训练')
     parser.add_argument('-w', '--wait-time', type=float, default=0, help='设置图像显示等待时间（单位：秒）')
-    parser.add_argument('-o', '--out', type=str, default='data/附件4.xlsx', help='设置完成后数据导出文件')
+    parser.add_argument('-o', '--out', type=str, default='data/result.xlsx', help='设置完成后数据导出文件')
     parser.add_argument('-m', '--module-path', type=str, default='data/module.pth', help='设置模型保存路径')
     # parser.add_argument('-t', '--load-path', type=str, default='data/module.pth', help='设置模型加载路径')
     parser.add_argument('-t', '--load-path', type=str, default=None, help='设置模型加载路径')
@@ -323,6 +383,8 @@ if __name__ == '__main__':
     parser.add_argument('-w3', '--w3', type=float, default=weight_default[2], help='设置权值3')
     parser.add_argument('-e', '--enlarge', type=float, default=500, help='设置图像伸缩放大倍数')
     parser.add_argument('-i', '--mode', type=str, default='ring', help='设置训练模式["ring", "single"]')
+    parser.add_argument('-c', '--calc-only', type=bool, default=False, help='设置计算第 (3) 问后退出')
+
     args = parser.parse_args()
     logger.info(f'参数: {args}')
     main(**args.__dict__)
